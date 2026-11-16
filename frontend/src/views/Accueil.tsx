@@ -376,6 +376,7 @@ export function Accueil() {
     }
   }, [isRecording, startRecording, stopRecording]);
 
+  // Raccourci clavier : se réabonne quand toggleRecording change, SANS toucher à l'enregistrement en cours.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey && e.code === 'Space') {
@@ -384,8 +385,12 @@ export function Accueil() {
       }
     };
     window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [toggleRecording]);
+
+  // Libère le micro uniquement au démontage de la vue (avant : à chaque changement d'état, ce qui coupait l'enregistrement).
+  useEffect(() => {
     return () => {
-      window.removeEventListener('keydown', onKeyDown);
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop();
       }
@@ -395,7 +400,7 @@ export function Accueil() {
         }
       }
     };
-  }, [toggleRecording]);
+  }, []);
 
   const toggleWidget = (id: WidgetId) => {
     setWidgets((prev) =>

@@ -157,6 +157,11 @@ async def transcrire_audio(request: Request) -> dict[str, str]:
     try:
         await asyncio.to_thread(tmp_path.write_bytes, octets)
         texte = await asyncio.to_thread(stt.transcrire, tmp_path)
+    except EOFError as exc:  # av.error.EOFError hérite d'EOFError : fichier sans audio exploitable
+        logger.warning("Enregistrement vide ou trop court (%d octets) : %s", len(octets), exc)
+        raise HTTPException(
+            status_code=400, detail="Enregistrement vide ou trop court : parle un peu plus longtemps."
+        ) from exc
     except Exception as exc:
         logger.exception("Erreur lors de la transcription audio")
         raise HTTPException(status_code=500, detail=f"Erreur de transcription : {exc}") from exc
