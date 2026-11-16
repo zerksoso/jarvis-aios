@@ -5,6 +5,7 @@ import {
   Cpu,
   Database,
   Download,
+  ExternalLink,
   Info,
   LoaderCircle,
   Mic,
@@ -31,9 +32,12 @@ import type {
   Memoire,
   MoteurId,
   Parametres,
+  PontWebOuvrirReponse,
   SttModele,
   VoixEtat,
   VoixMicro,
+  WebNavigateurVoix,
+  WebServiceVoix,
 } from '@/lib/types';
 import { useMaj } from '@/store/useMaj';
 import { useMoteurs } from '@/store/useMoteurs';
@@ -123,6 +127,48 @@ const DECLENCHEMENT_OPTIONS: Array<{
     id: 'continu',
     label: 'Conversation continue',
     desc: 'Écoute mains libres avec détection de parole et coupure instantanée.',
+  },
+];
+
+const WEB_SERVICES_OPTIONS: Array<{
+  id: WebServiceVoix;
+  label: string;
+  url: string;
+  desc: string;
+}> = [
+  {
+    id: 'chatgpt',
+    label: 'ChatGPT',
+    url: 'https://chatgpt.com/',
+    desc: 'Ouvre ChatGPT dans son interface dédiée avec ta session habituelle.',
+  },
+  {
+    id: 'gemini',
+    label: 'Gemini',
+    url: 'https://gemini.google.com/app',
+    desc: 'Ouvre Google Gemini dans son interface dédiée avec ton compte Google.',
+  },
+];
+
+const WEB_NAVIGATEUR_OPTIONS: Array<{
+  id: WebNavigateurVoix;
+  label: string;
+  desc: string;
+}> = [
+  {
+    id: 'defaut',
+    label: 'Navigateur par défaut',
+    desc: 'Ouvre le site avec ton navigateur Windows par défaut.',
+  },
+  {
+    id: 'chrome',
+    label: 'Google Chrome (--app)',
+    desc: 'Fenêtre épurée dédiée avec ton profil Chrome déjà connecté.',
+  },
+  {
+    id: 'edge',
+    label: 'Microsoft Edge (--app)',
+    desc: 'Fenêtre épurée dédiée avec ton profil Edge déjà connecté.',
   },
 ];
 
@@ -216,6 +262,7 @@ export function ParametresView() {
   const [voixEtat, setVoixEtat] = useState<VoixEtat | null>(null);
   const [loadingVoixEtat, setLoadingVoixEtat] = useState(false);
   const [testingVoice, setTestingVoice] = useState(false);
+  const [openingWeb, setOpeningWeb] = useState(false);
   const testAudioRef = useRef<HTMLAudioElement | null>(null);
   const testAudioUrlRef = useRef<string | null>(null);
 
@@ -418,6 +465,27 @@ export function ParametresView() {
       addToast(msg, 'erreur');
     } finally {
       setTestingVoice(false);
+    }
+  };
+
+  const handleOpenPontWeb = async () => {
+    setOpeningWeb(true);
+    try {
+      const res = await api.post<PontWebOuvrirReponse>('/api/voix/web/ouvrir', {
+        service: draft.voix.web_service,
+        navigateur: draft.voix.web_navigateur,
+      });
+      const nomService = res?.service === 'gemini' ? 'Gemini' : 'ChatGPT';
+      addToast(
+        res?.action === 'premier_plan'
+          ? `${nomService} ramené au premier plan.`
+          : `${nomService} ouvert — lance le mode vocal dans la fenêtre.`,
+        'succes',
+      );
+    } catch {
+      // Erreur notifiée par toast global API
+    } finally {
+      setOpeningWeb(false);
     }
   };
 
@@ -724,38 +792,161 @@ export function ParametresView() {
           </div>
 
           {/* Mode vocal */}
-          <div>
+          <div className="space-y-4">
             <span className="hud-label block">Mode vocal</span>
-            <div className="mt-2 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-              <div className="rounded-xl border border-[var(--accent)]/60 bg-[var(--accent)]/12 p-3.5 text-left">
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setDraft({
+                    ...draft,
+                    voix: { ...draft.voix, mode: 'local' },
+                  })
+                }
+                className={cn(
+                  'rounded-xl border p-3.5 text-left transition',
+                  draft.voix.mode === 'local'
+                    ? 'border-[var(--accent)]/60 bg-[var(--accent)]/12'
+                    : 'border-white/10 bg-[#05070d]/70 hover:border-white/25',
+                )}
+              >
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-semibold text-[#f8fafc]">Pipeline local</span>
-                  <span className="rounded-full border border-[var(--accent)]/40 bg-[var(--accent)]/15 px-2 py-0.5 font-mono text-[10px] text-[var(--accent)]">
-                    Actif
-                  </span>
+                  {draft.voix.mode === 'local' && (
+                    <span className="rounded-full border border-[var(--accent)]/40 bg-[var(--accent)]/15 px-2 py-0.5 font-mono text-[10px] text-[var(--accent)]">
+                      Actif
+                    </span>
+                  )}
                 </div>
                 <p className="mt-1 text-[11px] text-[#94a3b8]">
                   Transcription Whisper locale + synthèse vocale sans clé API payante.
                 </p>
-              </div>
+              </button>
 
               <button
                 type="button"
-                disabled
-                aria-disabled="true"
-                className="cursor-not-allowed rounded-xl border border-white/10 bg-[#05070d]/50 p-3.5 text-left opacity-55"
+                onClick={() =>
+                  setDraft({
+                    ...draft,
+                    voix: { ...draft.voix, mode: 'web' },
+                  })
+                }
+                className={cn(
+                  'rounded-xl border p-3.5 text-left transition',
+                  draft.voix.mode === 'web'
+                    ? 'border-[var(--accent)]/60 bg-[var(--accent)]/12'
+                    : 'border-white/10 bg-[#05070d]/70 hover:border-white/25',
+                )}
               >
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-semibold text-[#94a3b8]">Pont web : bientôt</span>
-                  <span className="rounded-full border border-white/15 bg-white/5 px-2 py-0.5 font-mono text-[10px] text-[#94a3b8]">
-                    Bientôt
+                  <span className="text-xs font-semibold text-[#f8fafc]">
+                    Pont web (ChatGPT / Gemini)
                   </span>
+                  {draft.voix.mode === 'web' && (
+                    <span className="rounded-full border border-[var(--accent)]/40 bg-[var(--accent)]/15 px-2 py-0.5 font-mono text-[10px] text-[var(--accent)]">
+                      Actif
+                    </span>
+                  )}
                 </div>
-                <p className="mt-1 text-[11px] text-[#64748b]">
-                  Relais vocal navigateur distant prévu dans une future version.
+                <p className="mt-1 text-[11px] text-[#94a3b8]">
+                  Ouvre la fenêtre de ton service vocal web sur Ctrl+Espace ou clic sur l&apos;orbe.
                 </p>
               </button>
             </div>
+
+            {draft.voix.mode === 'web' && (
+              <div className="space-y-4 rounded-xl border border-[var(--accent)]/30 bg-[#05070d]/70 p-4">
+                <div className="space-y-2">
+                  <span className="hud-label block">Service web</span>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    {WEB_SERVICES_OPTIONS.map((svc) => (
+                      <button
+                        key={svc.id}
+                        type="button"
+                        onClick={() =>
+                          setDraft({
+                            ...draft,
+                            voix: { ...draft.voix, web_service: svc.id },
+                          })
+                        }
+                        className={cn(
+                          'rounded-xl border p-3 text-left transition',
+                          draft.voix.web_service === svc.id
+                            ? 'border-[var(--accent)]/60 bg-[var(--accent)]/12'
+                            : 'border-white/10 bg-[#05070d]/70 hover:border-white/25',
+                        )}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-semibold text-[#f8fafc]">{svc.label}</span>
+                          <span className="truncate font-mono text-[10px] text-[#64748b]">
+                            {svc.url}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-[11px] text-[#94a3b8]">{svc.desc}</p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <span className="hud-label block">Navigateur</span>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    {WEB_NAVIGATEUR_OPTIONS.map((nav) => (
+                      <button
+                        key={nav.id}
+                        type="button"
+                        onClick={() =>
+                          setDraft({
+                            ...draft,
+                            voix: { ...draft.voix, web_navigateur: nav.id },
+                          })
+                        }
+                        className={cn(
+                          'rounded-xl border p-3 text-left transition',
+                          draft.voix.web_navigateur === nav.id
+                            ? 'border-[var(--accent)]/60 bg-[var(--accent)]/12'
+                            : 'border-white/10 bg-[#05070d]/70 hover:border-white/25',
+                        )}
+                      >
+                        <div className="text-xs font-semibold text-[#f8fafc]">{nav.label}</div>
+                        <p className="mt-0.5 text-[11px] text-[#94a3b8]">{nav.desc}</p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-2.5 rounded-xl border border-white/10 bg-[#0b1020]/70 p-3.5 text-[11px] leading-relaxed text-[#cbd5e1]">
+                  <Info className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent)]" />
+                  <div className="space-y-1">
+                    <p>
+                      <strong>Fonctionnement simple :</strong> Jarvis ouvre la fenêtre du service (ou la ramène au premier plan), puis tu lances le mode vocal du site toi-même.
+                    </p>
+                    <p className="text-[#94a3b8]">
+                      Aucune commande n&apos;est transmise à Jarvis dans ce mode (aucun pilotage ni lecture de la page). Ton compte personnel et ses conditions d&apos;utilisation s&apos;appliquent.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-[11px] text-[#94a3b8]">
+                    Pense à cliquer sur <strong>Enregistrer</strong> pour activer ce mode sur l&apos;orbe et <code className="font-mono">Ctrl+Espace</code>.
+                  </span>
+                  <button
+                    type="button"
+                    disabled={openingWeb}
+                    onClick={() => void handleOpenPontWeb()}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--accent)]/50 bg-[var(--accent)]/15 px-3.5 py-2 text-xs font-semibold text-[var(--accent)] transition hover:bg-[var(--accent)]/25 disabled:opacity-50"
+                  >
+                    {openingWeb ? (
+                      <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    )}
+                    {openingWeb ? 'Ouverture…' : 'Ouvrir maintenant'}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Microphone */}

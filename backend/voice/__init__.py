@@ -1,5 +1,5 @@
-"""Package vocal Jarvis : reconnaissance locale (STT) et synthèse vocale (TTS)."""
+"""Package vocal Jarvis : reconnaissance locale (STT), synthèse (TTS) et pont web."""
 
-from backend.voice import stt, tts
+from backend.voice import pont_web, stt, tts
 
-__all__ = ["stt", "tts"]
+__all__ = ["pont_web", "stt", "tts"]

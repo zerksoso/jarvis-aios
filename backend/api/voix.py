@@ -7,7 +7,7 @@ import logging
 import re
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket
 from fastapi.responses import FileResponse
@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from backend import config, settings_store
 from backend.lifecycle import register_startup
-from backend.voice import stt, tts
+from backend.voice import pont_web, stt, tts
 from backend.ws_hub import hub
 
 logger = logging.getLogger(__name__)
@@ -44,6 +44,13 @@ class TesterVoixRequest(BaseModel):
     voix: str | None = None
     moteur_tts: str | None = None
     tts_url: str | None = None
+
+
+class OuvrirPontWebRequest(BaseModel):
+    """Corps optionnel pour ouvrir ou activer la fenêtre du pont web vocal."""
+
+    service: Literal["chatgpt", "gemini"] | None = None
+    navigateur: Literal["defaut", "chrome", "edge"] | None = None
 
 
 async def _handle_ws_ecoute(ws: WebSocket, data: dict[str, Any]) -> None:
@@ -361,3 +368,43 @@ async def tester_voix(body: TesterVoixRequest | None = None) -> FileResponse:
 
     media_type = "audio/wav" if chemin.suffix.lower() == ".wav" else "audio/mpeg"
     return FileResponse(chemin, media_type=media_type)
+
+
+@router.post("/web/ouvrir")
+async def ouvrir_pont_web(body: OuvrirPontWebRequest | None = None) -> dict[str, Any]:
+    """Ouvre ou ramène au premier plan la fenêtre ChatGPT ou Gemini du pont web.
+
+    N'effectue aucun pilotage du site : seules les deux URL fixes de la liste blanche
+    (ChatGPT et Gemini) peuvent être ouvertes.
+
+    Args:
+        body: Surcharges optionnelles ``service`` et ``navigateur`` ; par défaut, utilise
+            ``voix.web_service`` et ``voix.web_navigateur`` depuis ``parametres.json``.
+
+    Returns:
+        Dictionnaire ``{"ok": bool, "action": "premier_plan" | "ouverture", "service": str}``.
+
+    Raises:
+        HTTPException: 400 si le service ou navigateur est invalide, 503 si l'ouverture échoue.
+
+    Effets de bord:
+        Place la fenêtre correspondante au premier plan ou lance le navigateur avec l'URL autorisée.
+    """
+    req = body or OuvrirPontWebRequest()
+    voix_cfg = settings_store.lire().get("voix")
+    cfg_dict = voix_cfg if isinstance(voix_cfg, dict) else {}
+
+    service = str(req.service or cfg_dict.get("web_service") or "chatgpt").strip().lower()
+    navigateur = str(req.navigateur or cfg_dict.get("web_navigateur") or "defaut").strip().lower()
+
+    try:
+        return await asyncio.to_thread(
+            pont_web.ouvrir_service_web,
+            service=service,
+            navigateur=navigateur,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Échec d'ouverture du pont web (%s / %s)", service, navigateur)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc

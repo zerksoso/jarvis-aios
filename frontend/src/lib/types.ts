@@ -212,6 +212,15 @@ export type SttModele = 'large-v3-turbo' | 'medium' | 'small';
 /** Mode de déclenchement de l'écoute vocale. */
 export type DeclenchementVoix = 'push' | 'continu';
 
+/** Mode vocal global : pipeline local ou pont web simple. */
+export type ModeVoix = 'local' | 'web';
+
+/** Service vocal web autorisé par le pont web. */
+export type WebServiceVoix = 'chatgpt' | 'gemini';
+
+/** Navigateur utilisé pour ouvrir le pont web. */
+export type WebNavigateurVoix = 'defaut' | 'chrome' | 'edge';
+
 /** Paramètres vocaux et audio (`parametres.json` -> `voix`). */
 export interface VoixParametres {
   active: boolean;
@@ -224,6 +233,16 @@ export interface VoixParametres {
   micro: string | null;
   rapide: boolean;
   modele_rapide: string;
+  mode: ModeVoix;
+  web_service: WebServiceVoix;
+  web_navigateur: WebNavigateurVoix;
+}
+
+/** Réponse renvoyée par `POST /api/voix/web/ouvrir`. */
+export interface PontWebOuvrirReponse {
+  ok: boolean;
+  action: 'premier_plan' | 'ouverture';
+  service: WebServiceVoix | string;
 }
 
 /** Périphérique microphone renvoyé par `GET /api/voix/micros`. */

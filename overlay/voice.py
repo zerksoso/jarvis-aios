@@ -6,9 +6,11 @@ import ctypes
 import logging
 import sys
 import threading
+import time
+from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtCore import QObject, QUrl, Signal
+from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 
 from overlay.cards import CardsContainer
@@ -16,7 +18,11 @@ from overlay.client import BASE_HTTP_URL, JarvisClient
 from overlay.hud_layer import HudLayer
 from overlay.orb import OrbWidget
 from overlay.subtitles import SubtitlesBubble
-from overlay.voice_stream import ConversationVocaleOverlay
+from overlay.voice_stream import (
+    INTERVALLE_NIVEAU_SORTIE_MS,
+    ConversationVocaleOverlay,
+    LecteurCreteSortieWindows,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +33,8 @@ VK_SPACE = 0x20
 WM_QUIT = 0x0012
 WM_HOTKEY = 0x0312
 HOTKEY_ID = 1
+DELAI_SILENCE_PONT_WEB_S = 5.0
+SEUIL_CRETE_PONT_WEB = 0.015
 
 
 class GlobalHotkeyListener(QObject):
@@ -136,6 +144,9 @@ class VoiceOrchestrator(QObject):
         cards: CardsContainer,
         hotkey: GlobalHotkeyListener,
         voice_stream: ConversationVocaleOverlay | None = None,
+        lecteur_sortie: LecteurCreteSortieWindows | None = None,
+        horloge_fn: Callable[[], float] | None = None,
+        delai_silence_web_s: float = DELAI_SILENCE_PONT_WEB_S,
         parent: QObject | None = None,
     ) -> None:
         """Relie les signaux du client WS, du raccourci, des widgets HUD et du module vocal."""
@@ -150,6 +161,16 @@ class VoiceOrchestrator(QObject):
 
         self._en_ecoute = False
         self._mode_declenchement = "push"
+        self._mode_voix = "local"
+        self._web_service = "chatgpt"
+        self._lecteur_sortie = lecteur_sortie or LecteurCreteSortieWindows()
+        self._horloge_fn = horloge_fn or time.monotonic
+        self._delai_silence_web_s = max(0.1, float(delai_silence_web_s))
+        self._dernier_son_web_s = 0.0
+
+        self._timer_pont_web = QTimer(self)
+        self._timer_pont_web.setInterval(INTERVALLE_NIVEAU_SORTIE_MS)
+        self._timer_pont_web.timeout.connect(self._tic_audio_pont_web)
 
         self._audio_output = QAudioOutput(self)
         self._audio_output.setVolume(1.0)
@@ -187,18 +208,48 @@ class VoiceOrchestrator(QObject):
             self._voice_stream.set_mode(normalise)
         self.mode_declenchement_change.emit(normalise)
 
+    @property
+    def mode_voix(self) -> str:
+        """Retourne le mode vocal configuré (``"local"`` ou ``"web"``)."""
+        return self._mode_voix
+
+    def set_mode_voix(self, mode: str, web_service: str | None = None) -> None:
+        """Met à jour le mode vocal (``"local"`` ou ``"web"``) et le service web cible.
+
+        Args:
+            mode: ``"local"`` pour le pipeline Whisper/TTS, ``"web"`` pour le pont web.
+            web_service: ``"chatgpt"`` ou ``"gemini"`` (optionnel).
+
+        Effets de bord:
+            Coupe une éventuelle session locale ou un suivi crête web incompatible.
+        """
+        normalise = "web" if str(mode).strip().lower() == "web" else "local"
+        self._mode_voix = normalise
+        if web_service is not None:
+            svc = str(web_service).strip().lower()
+            self._web_service = "gemini" if svc == "gemini" else "chatgpt"
+
+        if normalise == "web":
+            self._en_ecoute = False
+            if self._voice_stream is not None and self._voice_stream.est_active:
+                self._voice_stream.arreter()
+        else:
+            self._arreter_suivi_pont_web(remettre_repos=True)
+
     def arreter(self) -> None:
         """Interrompt toute capture/lecture audio en cours lors de la fermeture de l'overlay."""
         self._en_ecoute = False
+        self._arreter_suivi_pont_web(remettre_repos=False)
         self._player.stop()
         if self._voice_stream is not None:
             self._voice_stream.arreter()
 
     def _on_connecte_change(self, connecte: bool) -> None:
-        """Synchronise l'état de connexion sur l'orbe et charge ``voix.declenchement``."""
+        """Synchronise l'état de connexion sur l'orbe et charge les réglages vocaux."""
         self._orb.set_connecte(connecte)
         if not connecte:
             self._en_ecoute = False
+            self._arreter_suivi_pont_web(remettre_repos=False)
             if self._voice_stream is not None and self._voice_stream.est_active:
                 self._voice_stream.arreter()
             return
@@ -209,15 +260,26 @@ class VoiceOrchestrator(QObject):
         )
 
     def _synchroniser_parametres_voix(self, parametres: Any) -> None:
-        """Synchronise ``voix.declenchement`` depuis ``GET /api/parametres``."""
+        """Synchronise ``voix.declenchement``, ``voix.mode`` et ``voix.web_service``."""
         if not isinstance(parametres, dict):
             return
         voix_cfg = parametres.get("voix")
-        if isinstance(voix_cfg, dict) and "declenchement" in voix_cfg:
+        if not isinstance(voix_cfg, dict):
+            return
+        if "declenchement" in voix_cfg:
             self.set_mode_declenchement(str(voix_cfg.get("declenchement") or "push"))
+        if "mode" in voix_cfg or "web_service" in voix_cfg:
+            self.set_mode_voix(
+                str(voix_cfg.get("mode") or self._mode_voix),
+                str(voix_cfg.get("web_service") or self._web_service),
+            )
 
     def basculer_ecoute(self) -> None:
-        """Démarre ou arrête la conversation vocale streaming (ou le talkie-walkie en repli)."""
+        """Déclenche le pont web en mode ``web``, ou démarre/arrête le pipeline local."""
+        if self._mode_voix == "web":
+            self._declencher_pont_web()
+            return
+
         if self._voice_stream is not None:
             if self._voice_stream.est_active:
                 self._voice_stream.arreter()
@@ -230,6 +292,67 @@ class VoiceOrchestrator(QObject):
             return
 
         self._basculer_ecoute_talkie_walkie()
+
+    def _declencher_pont_web(self) -> None:
+        """Appelle ``POST /api/voix/web/ouvrir`` sans démarrer le pipeline vocal local."""
+        if not self._client.est_connecte:
+            self._subtitles.on_narration("Serveur Jarvis hors ligne — reconnexion en cours…")
+            return
+
+        self._player.stop()
+        self._client.post_async(
+            "/api/voix/web/ouvrir",
+            payload=None,
+            timeout=10.0,
+            on_success=self._apres_ouverture_pont_web,
+            on_error=self._erreur_pont_web,
+        )
+
+    def _apres_ouverture_pont_web(self, resultat: Any) -> None:
+        """Passe l'orbe en état ``parole``, affiche le sous-titre court et suit la crête audio."""
+        service_brut = (
+            str(resultat.get("service") or self._web_service)
+            if isinstance(resultat, dict)
+            else self._web_service
+        )
+        service = "gemini" if service_brut.strip().lower() == "gemini" else "chatgpt"
+        libelle = "Gemini" if service == "gemini" else "ChatGPT"
+
+        self._subtitles.on_narration(f"{libelle} ouvert — lance le mode vocal")
+        self._orb.set_etat("parole")
+        self._dernier_son_web_s = float(self._horloge_fn())
+        if not self._timer_pont_web.isActive():
+            self._timer_pont_web.start()
+        self._tic_audio_pont_web()
+
+    def _erreur_pont_web(self, exc: Exception) -> None:
+        """Rétablit l'orbe au repos et affiche la raison si l'ouverture web échoue."""
+        logger.warning("Échec d'ouverture du pont web : %s", exc)
+        self._arreter_suivi_pont_web(remettre_repos=True)
+        self._subtitles.on_narration(str(exc))
+
+    def _tic_audio_pont_web(self) -> None:
+        """Anime l'orbe sur la crête audio Windows (pycaw) et revient au repos après 5 s de silence."""
+        maintenant = float(self._horloge_fn())
+        niveau = self._lecteur_sortie.lire_niveau()
+        if niveau is not None and niveau >= SEUIL_CRETE_PONT_WEB:
+            self._dernier_son_web_s = maintenant
+            if self._orb.etat != "parole":
+                self._orb.set_etat("parole")
+            self._orb.set_niveau(niveau)
+            return
+
+        self._orb.set_niveau(0.0)
+        if maintenant - self._dernier_son_web_s >= self._delai_silence_web_s:
+            self._arreter_suivi_pont_web(remettre_repos=True)
+
+    def _arreter_suivi_pont_web(self, *, remettre_repos: bool) -> None:
+        """Stoppe le timer de mesure crête audio du pont web et remet le niveau à zéro."""
+        if self._timer_pont_web.isActive():
+            self._timer_pont_web.stop()
+        self._orb.set_niveau(0.0)
+        if remettre_repos and self._orb.etat == "parole":
+            self._orb.set_etat("repos")
 
     def _on_repli_talkie_walkie(self, raison: str) -> None:
         """Bascule automatiquement vers le talkie-walkie historique si ``/ws/voix`` échoue."""
@@ -340,6 +463,8 @@ class VoiceOrchestrator(QObject):
                     timeout=5.0,
                     on_success=lambda params, txt=contenu: self._apres_parametres(params, txt),
                 )
+        elif msg_type == "parametres_maj":
+            self._synchroniser_parametres_voix(data)
         elif msg_type == "voix_parler":
             url = str(data.get("url") or "").strip()
             if url:

@@ -42,6 +42,9 @@ def defauts_voix() -> dict[str, Any]:
         "micro": None,
         "rapide": True,
         "modele_rapide": "gemini-4-hydrogen-low",
+        "mode": "local",
+        "web_service": "chatgpt",
+        "web_navigateur": "defaut",
     }
 
 
@@ -149,13 +152,34 @@ def executer_assistant(
     print("=== Configuration vocale de Jarvis AIOS ===\n")
 
     print("1. Mode vocal :")
-    print("  [1] Pont web (non disponible pour l'instant)")
+    print("  [1] Pont web (ChatGPT / Gemini — ouvre la fenêtre, mode vocal du site)")
     print("  [2] Pipeline local sur cet ordinateur (défaut)")
     mode = _demander_choix("Votre choix", {"1", "2"}, "2", input_fn=input_fn)
     if mode == "1":
-        print("-> Le mode Pont web n'est pas encore disponible ; utilisation du Pipeline local.\n")
-    else:
-        print("-> Pipeline local sélectionné.\n")
+        bloc["mode"] = "web"
+        print("-> Pont web sélectionné (aucune commande n'est transmise à Jarvis dans ce mode).\n")
+
+        print("1a. Service vocal web :")
+        print("  [1] ChatGPT (https://chatgpt.com/, défaut)")
+        print("  [2] Gemini (https://gemini.google.com/app)")
+        choix_service = _demander_choix("Votre choix", {"1", "2"}, "1", input_fn=input_fn)
+        bloc["web_service"] = "chatgpt" if choix_service == "1" else "gemini"
+        print()
+
+        print("1b. Navigateur pour le pont web :")
+        print("  [1] Navigateur par défaut du système (défaut)")
+        print("  [2] Google Chrome (fenêtre dédiée)")
+        print("  [3] Microsoft Edge (fenêtre dédiée)")
+        choix_nav = _demander_choix("Votre choix", {"1", "2", "3"}, "1", input_fn=input_fn)
+        bloc["web_navigateur"] = {"1": "defaut", "2": "chrome", "3": "edge"}[choix_nav]
+
+        params_path, flag_path = enregistrer_configuration_voix(bloc, dossier_donnees=dossier_donnees)
+        print(f"\nConfiguration enregistrée dans {params_path}")
+        print(f"Marqueur écrit dans {flag_path}")
+        return bloc
+
+    bloc["mode"] = "local"
+    print("-> Pipeline local sélectionné.\n")
 
     cuda_ok = stt.cuda_disponible()
     defaut_whisper = "1" if cuda_ok else "3"

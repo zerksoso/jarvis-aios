@@ -27,6 +27,9 @@ DEFAUTS: dict[str, Any] = {
         "micro": None,
         "rapide": True,
         "modele_rapide": "gemini-4-hydrogen-low",
+        "mode": "local",
+        "web_service": "chatgpt",
+        "web_navigateur": "defaut",
     },
     "raccourci": "ctrl+space",
     "memoire_auto": True,
@@ -39,6 +42,9 @@ DEFAUTS: dict[str, Any] = {
 _MOTEURS_TTS = ("edge", "windows", "http")
 _MODELES_STT = ("large-v3-turbo", "medium", "small")
 _DECLENCHEMENTS_VOIX = ("push", "continu")
+_MODES_VOIX = ("local", "web")
+_WEB_SERVICES = ("chatgpt", "gemini")
+_WEB_NAVIGATEURS = ("defaut", "chrome", "edge")
 
 _lock = threading.Lock()
 
@@ -104,6 +110,17 @@ def _normaliser_bloc_voix(voix: dict[str, Any], defauts_voix: dict[str, Any]) ->
         str(modele_rapide).strip()
         if isinstance(modele_rapide, str) and modele_rapide.strip()
         else defauts_voix["modele_rapide"]
+    )
+
+    mode = str(res.get("mode") or "").strip().lower()
+    res["mode"] = mode if mode in _MODES_VOIX else defauts_voix["mode"]
+
+    web_service = str(res.get("web_service") or "").strip().lower()
+    res["web_service"] = web_service if web_service in _WEB_SERVICES else defauts_voix["web_service"]
+
+    web_navigateur = str(res.get("web_navigateur") or "").strip().lower()
+    res["web_navigateur"] = (
+        web_navigateur if web_navigateur in _WEB_NAVIGATEURS else defauts_voix["web_navigateur"]
     )
     return res
 

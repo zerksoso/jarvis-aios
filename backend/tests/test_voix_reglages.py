@@ -50,6 +50,9 @@ def test_parametres_voix_defauts_et_validation(
         "micro": None,
         "rapide": True,
         "modele_rapide": "gemini-4-hydrogen-low",
+        "mode": "local",
+        "web_service": "chatgpt",
+        "web_navigateur": "defaut",
     }
 
     # Si le fichier n'existe pas encore et CUDA est présent -> large-v3-turbo + beam 1.
@@ -60,6 +63,9 @@ def test_parametres_voix_defauts_et_validation(
     assert voix_gpu["stt_modele"] == "large-v3-turbo"
     assert voix_gpu["stt_beam_final"] == 1
     assert voix_gpu["nom"] == "fr-FR-HenriNeural"
+    assert voix_gpu["mode"] == "local"
+    assert voix_gpu["web_service"] == "chatgpt"
+    assert voix_gpu["web_navigateur"] == "defaut"
 
     # Mises à jour valides, y compris réinitialisation explicite de tts_url/micro à null.
     rep_ok = client.put(
@@ -74,6 +80,9 @@ def test_parametres_voix_defauts_et_validation(
                 "declenchement": "continu",
                 "micro": "Casque USB",
                 "rapide": False,
+                "mode": "web",
+                "web_service": "gemini",
+                "web_navigateur": "edge",
             }
         },
     )
@@ -88,6 +97,9 @@ def test_parametres_voix_defauts_et_validation(
     assert v["rapide"] is False
     assert v["active"] is True
     assert v["nom"] == "fr-FR-HenriNeural"
+    assert v["mode"] == "web"
+    assert v["web_service"] == "gemini"
+    assert v["web_navigateur"] == "edge"
 
     rep_clear = client.put(
         "/api/parametres",
@@ -106,6 +118,9 @@ def test_parametres_voix_defauts_et_validation(
         {"voix": {"declenchement": "telepathie"}},
         {"voix": {"tts_url": "ftp://serveur-invalide"}},
         {"voix": {"nom": "   "}},
+        {"voix": {"mode": "hybride"}},
+        {"voix": {"web_service": "perplexity"}},
+        {"voix": {"web_navigateur": "firefox"}},
     ]
     for payload in invalides:
         assert client.put("/api/parametres", headers=auth_headers, json=payload).status_code == 422

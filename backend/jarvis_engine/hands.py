@@ -138,6 +138,36 @@ _PROCESSUS_FENETRE: dict[str, str] = {
 }
 
 
+def activer_fenetre_hwnd(hwnd: int, *, delai_s: float = 0.4) -> bool:
+    """Restaure et place une fenêtre Windows ``hwnd`` au premier plan.
+
+    Windows refuse ``SetForegroundWindow`` à un processus d'arrière-plan : on simule
+    l'appui sur Alt (astuce documentée) avant de demander le premier plan.
+
+    Args:
+        hwnd: Descripteur Win32 de la fenêtre cible.
+        delai_s: Pause (secondes) avant de vérifier la fenêtre active.
+
+    Returns:
+        ``True`` si la fenêtre est au premier plan après l'opération.
+
+    Effets de bord:
+        Émet une impulsion Alt synthétique, restaure (``SW_RESTORE``) et active ``hwnd``.
+    """
+    if sys.platform != "win32":
+        return False
+    import ctypes
+
+    user32 = ctypes.windll.user32
+    user32.keybd_event(0x12, 0, 0, 0)  # Alt enfoncé
+    user32.keybd_event(0x12, 0, 2, 0)  # Alt relâché
+    user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+    user32.SetForegroundWindow(hwnd)
+    if delai_s > 0:
+        time.sleep(delai_s)
+    return bool(user32.GetForegroundWindow() == hwnd)
+
+
 def _mettre_au_premier_plan(cle: str, delai_s: float = 6.0) -> bool:
     """Attend la fenêtre visible de l'application ``cle`` puis la met au premier plan.
 
@@ -179,13 +209,7 @@ def _mettre_au_premier_plan(cle: str, delai_s: float = 6.0) -> bool:
 
         user32.EnumWindows(_cb, 0)
         if trouvees:
-            hwnd = trouvees[0]
-            user32.keybd_event(0x12, 0, 0, 0)  # Alt enfoncé
-            user32.keybd_event(0x12, 0, 2, 0)  # Alt relâché
-            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-            user32.SetForegroundWindow(hwnd)
-            time.sleep(0.4)
-            return user32.GetForegroundWindow() == hwnd
+            return activer_fenetre_hwnd(trouvees[0], delai_s=0.4)
         time.sleep(0.3)
     return False
 

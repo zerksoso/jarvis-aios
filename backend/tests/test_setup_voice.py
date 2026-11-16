@@ -52,6 +52,9 @@ def test_setup_voice_non_interactif_ecrit_bloc_voix_et_flag(
             "micro": None,
             "rapide": True,
             "modele_rapide": "gemini-4-hydrogen-low",
+            "mode": "local",
+            "web_service": "chatgpt",
+            "web_navigateur": "defaut",
         }
         assert settings_store.lire()["voix"]["nom"] == "fr-FR-HenriNeural"
     finally:
@@ -62,14 +65,14 @@ def test_setup_voice_interactif_reponses_simulees(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Vérifie le parcours interactif en français avec choix personnalisés sans préchargement réseau."""
+    """Vérifie le parcours interactif local en français avec choix personnalisés sans préchargement réseau."""
     ancien_app_dir = config.APP_DIR
     monkeypatch.setenv("JARVIS_ROOT", str(tmp_path))
     monkeypatch.setattr(stt, "cuda_disponible", lambda: True)
 
     reponses = iter(
         [
-            "1",  # Pont web -> message non dispo, bascule sur local
+            "2",  # Pipeline local
             "2",  # medium
             "4",  # Serveur HTTP local
             "http://127.0.0.1:8899/",
@@ -84,11 +87,44 @@ def test_setup_voice_interactif_reponses_simulees(
             dossier_donnees=tmp_path,
             input_fn=lambda _prompt: next(reponses),
         )
+        assert bloc["mode"] == "local"
         assert bloc["stt_modele"] == "medium"
         assert bloc["stt_beam_final"] == 5
         assert bloc["moteur_tts"] == "http"
         assert bloc["tts_url"] == "http://127.0.0.1:8899"
         assert bloc["declenchement"] == "continu"
+        assert (tmp_path / "runtime" / "voix_configuree.flag").is_file()
+        assert (tmp_path / "runtime" / "parametres.json").is_file()
+    finally:
+        config.refresh_paths(app_dir=ancien_app_dir)
+
+
+def test_setup_voice_interactif_pont_web(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Vérifie le choix interactif 1 (Pont web) avec service et navigateur."""
+    ancien_app_dir = config.APP_DIR
+    monkeypatch.setenv("JARVIS_ROOT", str(tmp_path))
+    monkeypatch.setattr(stt, "cuda_disponible", lambda: False)
+
+    reponses = iter(
+        [
+            "1",  # Pont web
+            "2",  # Gemini
+            "2",  # Chrome
+        ]
+    )
+
+    try:
+        bloc = setup_voice.executer_assistant(
+            non_interactif=False,
+            dossier_donnees=tmp_path,
+            input_fn=lambda _prompt: next(reponses),
+        )
+        assert bloc["mode"] == "web"
+        assert bloc["web_service"] == "gemini"
+        assert bloc["web_navigateur"] == "chrome"
         assert (tmp_path / "runtime" / "voix_configuree.flag").is_file()
         assert (tmp_path / "runtime" / "parametres.json").is_file()
     finally:

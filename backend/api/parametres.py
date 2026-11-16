@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend import settings_store
 from backend.llm.base import Effort
+from backend.ws_hub import hub
 
 router = APIRouter(prefix="/parametres", tags=["parametres"])
 
@@ -29,6 +30,9 @@ class VoixPatch(BaseModel):
     micro: str | None = None
     rapide: bool | None = None
     modele_rapide: str | None = None
+    mode: Literal["local", "web"] | None = None
+    web_service: Literal["chatgpt", "gemini"] | None = None
+    web_navigateur: Literal["defaut", "chrome", "edge"] | None = None
 
     @field_validator("nom", "modele_rapide")
     @classmethod
@@ -116,7 +120,12 @@ async def mettre_a_jour_parametres(body: ParametresPatch) -> dict[str, Any]:
 
     Returns:
         Dictionnaire complet des paramètres mis à jour.
+
+    Effets de bord:
+        Persiste les paramètres sur disque et diffuse ``parametres_maj`` sur le hub WebSocket.
     """
     brut = body.model_dump(exclude_unset=True)
     partiel = _filtrer_patch(brut)
-    return settings_store.ecrire(partiel)
+    mis_a_jour = settings_store.ecrire(partiel)
+    await hub.broadcast("parametres_maj", mis_a_jour)
+    return mis_a_jour
