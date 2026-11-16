@@ -1,0 +1,18 @@
+{
+  "id": "general",
+  "nom": "general",
+  "description": "Canal principal réunissant toute l'équipe d'agents coordonnée par Jarvis.",
+  "membres": [
+    "jarvis",
+    "atlas",
+    "nova",
+    "maya",
+    "remi"
+  ],
+  "coordinateur": "jarvis",
+  "max_tours_par_agent": 2,
+  "routines": [
+    "brief-du-matin"
+  ],
+  "cree_le": "2026-11-16T09:00:00"
+}

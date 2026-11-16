@@ -1,0 +1,16 @@
+{
+  "id": "veille",
+  "nom": "veille",
+  "description": "Cellule de veille stratégique, analyse chiffrée et synthèse éditoriale.",
+  "membres": [
+    "atlas",
+    "remi",
+    "nova"
+  ],
+  "coordinateur": "atlas",
+  "max_tours_par_agent": 2,
+  "routines": [
+    "veille-hebdo"
+  ],
+  "cree_le": "2026-11-16T09:00:00"
+}

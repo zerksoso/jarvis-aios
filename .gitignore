@@ -1,0 +1,23 @@
+# Données utilisateur et exécution locale (ancrées sur la racine ; backend/aios/ reste suivi)
+/runtime/
+/second-brain/
+/agents/
+/canaux/
+/aios/
+/secrets/
+
+# Environnements, builds et artefacts
+/.venv/
+/.agent-runs/
+/build/
+/dist-release/
+/frontend/node_modules/
+/frontend/dist/
+
+# Caches et fichiers Python générés
+__pycache__/
+*.pyc
+*.db
+*.db-journal
+.pytest_cache/
+.ruff_cache/

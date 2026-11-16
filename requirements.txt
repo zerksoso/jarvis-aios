@@ -1,0 +1,37 @@
+# Dépendances Python de Jarvis AIOS (Python 3.12, venv .venv créé par : uv venv .venv --python 3.12)
+# Installation : uv pip install --python .venv\Scripts\python.exe -r requirements.txt
+fastapi
+uvicorn[standard]
+websockets
+pydantic>=2
+httpx
+python-frontmatter
+pyyaml
+watchdog
+apscheduler>=3.10,<4
+ddgs
+send2trash
+markdown
+mss
+pillow
+pyautogui
+pygetwindow
+pyperclip
+uiautomation
+pywin32
+pynput
+winrt-Windows.Media.Ocr
+winrt-Windows.Graphics.Imaging
+winrt-Windows.Storage.Streams
+winrt-Windows.Globalization
+winrt-Windows.Foundation
+winrt-Windows.Foundation.Collections
+rapidocr-onnxruntime
+sounddevice
+numpy
+faster-whisper
+# PyAV >= 16 a retiré l'argument metadata_errors utilisé par faster-whisper 1.2.x
+av<16
+edge-tts
+pyttsx3
+PySide6

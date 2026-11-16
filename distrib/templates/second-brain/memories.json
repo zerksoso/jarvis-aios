@@ -1,0 +1,26 @@
+[
+  {
+    "id": "mem-init-001",
+    "type": "preference",
+    "texte": "Répondre en français, de façon concise, structurée et orientée action.",
+    "source": "initialisation",
+    "agent": "jarvis",
+    "cree_le": "2026-01-01T00:00:00"
+  },
+  {
+    "id": "mem-init-002",
+    "type": "regle",
+    "texte": "Ne jamais publier de message ni envoyer quoi que ce soit à l'extérieur sans validation explicite de l'utilisateur.",
+    "source": "initialisation",
+    "agent": "jarvis",
+    "cree_le": "2026-01-01T00:00:00"
+  },
+  {
+    "id": "mem-init-003",
+    "type": "correction",
+    "texte": "Toujours vérifier les faits et les fichiers réels avant d'affirmer un résultat ou un statut.",
+    "source": "initialisation",
+    "agent": "jarvis",
+    "cree_le": "2026-01-01T00:00:00"
+  }
+]

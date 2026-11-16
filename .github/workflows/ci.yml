@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  verification:
+    runs-on: windows-latest
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v4
+
+      - name: Installer uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Installer Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: 'frontend/package-lock.json'
+
+      - name: Installer Python 3.12 et les dépendances dev
+        shell: pwsh
+        run: |
+          uv python install 3.12
+          uv venv .venv --python 3.12
+          uv pip install --python .venv\Scripts\python.exe -r requirements-dev.txt
+
+      - name: Vérification statique (ruff)
+        shell: pwsh
+        run: .venv\Scripts\python.exe -m ruff check .
+
+      - name: Tests unitaires et d'intégration (pytest)
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: .venv\Scripts\python.exe -m pytest
+
+      - name: Compilation du frontend
+        working-directory: frontend
+        shell: pwsh
+        run: |
+          npm ci
+          npm run build
+
+      - name: Scan de secrets et données personnelles
+        shell: pwsh
+        run: .venv\Scripts\python.exe distrib\scan_secrets.py .
