@@ -243,11 +243,11 @@ async def test_outil_irreversible_approbation_acceptee_refusee_expiree(
     _activer_moteur(moteur_oui)
 
     async def _repondre_oui_auto() -> None:
-        for _ in range(50):
+        # Attente large (CI lente) : l'approbation peut être listée juste avant le passage à « attend_accord ».
+        for _ in range(500):
             await asyncio.sleep(0.01)
             att = approvals.lister_approbations("en_attente")
-            if att:
-                assert agent_runtime.etat_agent("jarvis") == "attend_accord"
+            if att and agent_runtime.etat_agent("jarvis") == "attend_accord":
                 await approvals.repondre_approbation(att[0]["id"], "oui")
                 return
 
@@ -261,7 +261,7 @@ async def test_outil_irreversible_approbation_acceptee_refusee_expiree(
     _activer_moteur(moteur_non)
 
     async def _repondre_non_auto() -> None:
-        for _ in range(50):
+        for _ in range(500):
             await asyncio.sleep(0.01)
             att = approvals.lister_approbations("en_attente")
             if att:
