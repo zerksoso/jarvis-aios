@@ -8,6 +8,7 @@ import {
   FolderKanban,
   Hash,
   LayoutDashboard,
+  Mic,
   Palette,
   PanelLeftClose,
   PanelLeftOpen,
@@ -119,6 +120,7 @@ export function Sidebar({
   const paramItems = useMemo(
     () => [
       { to: '/parametres/personnalisation', label: 'Personnalisation', icon: Palette },
+      { to: '/parametres/voix', label: 'Voix & Audio', icon: Mic },
       { to: '/parametres/memoire', label: 'Mémoire', icon: Database },
       { to: '/parametres/modeles', label: 'Modèles par défaut', icon: Cpu },
       { to: '/parametres/maj', label: 'Mises à jour', icon: RefreshCw },

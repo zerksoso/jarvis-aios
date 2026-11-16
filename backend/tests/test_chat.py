@@ -144,7 +144,11 @@ def test_sante_moteurs_quotas_et_parametres(
 
     p_init = client.get("/api/parametres")
     assert p_init.status_code == 200
-    assert p_init.json()["voix"] == {"active": True, "nom": "fr-FR-DeniseNeural"}
+    voix_init = p_init.json()["voix"]
+    assert voix_init["active"] is True
+    assert voix_init["nom"] == "fr-FR-HenriNeural"
+    assert voix_init["moteur_tts"] == "edge"
+    assert voix_init["rapide"] is True
 
     p_maj = client.put(
         "/api/parametres",
@@ -154,5 +158,8 @@ def test_sante_moteurs_quotas_et_parametres(
     assert p_maj.status_code == 200
     data_maj = p_maj.json()
     assert data_maj["effort"] == "high"
-    # La fusion profonde conserve voix.nom intact.
-    assert data_maj["voix"] == {"active": False, "nom": "fr-FR-DeniseNeural"}
+    # La fusion profonde conserve voix.nom et les autres champs voix intacts.
+    assert data_maj["voix"]["active"] is False
+    assert data_maj["voix"]["nom"] == "fr-FR-HenriNeural"
+    assert data_maj["voix"]["moteur_tts"] == "edge"
+    assert data_maj["voix"]["rapide"] is True

@@ -12,6 +12,7 @@ from fastapi import WebSocket
 logger = logging.getLogger(__name__)
 
 WSHandler = Callable[..., Awaitable[None] | None]
+EcouteurWS = Callable[[str, dict[str, Any]], Awaitable[None] | None]
 
 
 def _enveloppe(msg_type: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -53,6 +54,8 @@ class Hub:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._handlers: dict[str, WSHandler] = {}
         self._persistent_handlers: dict[str, WSHandler] = {}
+        self._ecouteurs: list[EcouteurWS] = []
+        self._taches_ecouteurs: set[asyncio.Task[Any]] = set()
 
     @property
     def overlay_connecte(self) -> bool:
@@ -75,7 +78,44 @@ class Hub:
         """Réinitialise l'état dynamique du hub tout en conservant les handlers permanents."""
         self._clients.clear()
         self._handlers = dict(self._persistent_handlers)
+        self._ecouteurs.clear()
+        for tache in list(self._taches_ecouteurs):
+            tache.cancel()
+        self._taches_ecouteurs.clear()
         self._loop = None
+
+    def ajouter_ecouteur(self, fn: EcouteurWS) -> None:
+        """Enregistre un écouteur interne appelé à chaque diffusion ``broadcast``.
+
+        Args:
+            fn: Fonction synchrone ou coroutine ``fn(msg_type, data)``.
+
+        Effets de bord:
+            Ajoute ``fn`` à la liste interne des écouteurs s'il n'y est pas déjà.
+        """
+        if fn not in self._ecouteurs:
+            self._ecouteurs.append(fn)
+
+    def retirer_ecouteur(self, fn: EcouteurWS) -> None:
+        """Retire un écouteur interne préalablement enregistré.
+
+        Args:
+            fn: Référence de la fonction ou coroutine à retirer.
+
+        Effets de bord:
+            Supprime ``fn`` de la liste interne s'il est présent.
+        """
+        while fn in self._ecouteurs:
+            self._ecouteurs.remove(fn)
+
+    async def _executer_ecouteur_async(self, awaitable: Awaitable[Any], msg_type: str) -> None:
+        """Exécute un écouteur asynchrone en journalisant toute erreur sans la propager."""
+        try:
+            await awaitable
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Erreur dans un écouteur asynchrone du hub (%s).", msg_type)
 
     def register_handler(self, msg_type: str, handler: WSHandler) -> None:
         """Enregistre un gestionnaire asynchrone pour un type de message client entrant.
@@ -170,6 +210,17 @@ class Hub:
 
         for ws in morts:
             await self.disconnect(ws)
+
+        donnees = payload["data"]
+        for ecouteur in list(self._ecouteurs):
+            try:
+                res = ecouteur(msg_type, donnees)
+                if inspect.isawaitable(res):
+                    tache = asyncio.create_task(self._executer_ecouteur_async(res, msg_type))
+                    self._taches_ecouteurs.add(tache)
+                    tache.add_done_callback(self._taches_ecouteurs.discard)
+            except Exception:
+                logger.exception("Erreur dans un écouteur interne du hub (%s).", msg_type)
 
     def broadcast_threadsafe(
         self,

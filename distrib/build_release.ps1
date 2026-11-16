@@ -225,7 +225,7 @@ Copy-ArbreFiltre -Source $TemplatesSrc -Destination (Join-Path $StageDir 'templa
 Get-ChildItem -Path $RepoRoot -Filter 'ARCHITECTURE*.md' -File | ForEach-Object {
     Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $StageDir $_.Name) -Force
 }
-foreach ($docFichier in @('README.md', 'LICENSE')) {
+foreach ($docFichier in @('README.md', 'LICENSE', 'setup_voice.py')) {
     $srcDoc = Join-Path $RepoRoot $docFichier
     if (-not (Test-Path $srcDoc)) {
         throw "Fichier requis manquant à la racine : $srcDoc"

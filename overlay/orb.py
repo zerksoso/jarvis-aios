@@ -169,6 +169,44 @@ def calculer_position_pres_de_cadre(
     return _clamped_pos(candidats[0][0], candidats[0][1], avail, taille)
 
 
+def borner_niveau(niveau: float) -> float:
+    """Borne un niveau audio dans ``[0.0, 1.0]`` en ignorant ``NaN`` et infinis.
+
+    Args:
+        niveau: Valeur brute de niveau audio.
+
+    Returns:
+        Flottant fini compris entre ``0.0`` et ``1.0``.
+    """
+    try:
+        valeur = float(niveau)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(valeur):
+        return 0.0
+    return max(0.0, min(1.0, valeur))
+
+
+def lisser_niveau(courant: float, cible: float, dt: float, tau: float = 0.08) -> float:
+    """Applique un lissage exponentiel entre le niveau affiché et le niveau mesuré.
+
+    Args:
+        courant: Niveau lissé précédent dans ``[0.0, 1.0]``.
+        cible: Niveau instantané mesuré dans ``[0.0, 1.0]``.
+        dt: Pas de temps écoulé en secondes.
+        tau: Constante de temps du filtre exponentiel en secondes (0,08 s par défaut).
+
+    Returns:
+        Nouveau niveau lissé dans ``[0.0, 1.0]``.
+    """
+    c = borner_niveau(courant)
+    t = borner_niveau(cible)
+    if dt <= 0.0 or tau <= 0.0:
+        return t
+    alpha = 1.0 - math.exp(-dt / tau)
+    return borner_niveau(c + (t - c) * alpha)
+
+
 class OrbWidget(QWidget):
     """Widget flottant circulaire 110 px représentant l'état temps réel de Jarvis.
 
@@ -203,6 +241,8 @@ class OrbWidget(QWidget):
         self._couleur_courante = QColor(preset_init.couleur_hex)
         self._couleur_sec_courante = QColor(preset_init.couleur_secondaire_hex)
         self._phase = 0.0
+        self._niveau_cible = 0.0
+        self._niveau_lisse = 0.0
 
         self._home_pos = self._calculer_home_pos()
         self._cible_pos: QPoint | None = None
@@ -229,6 +269,24 @@ class OrbWidget(QWidget):
         """Retourne l'état courant affiché par l'orbe."""
         return self._machine.etat_effectif
 
+    @property
+    def niveau(self) -> float:
+        """Retourne le niveau audio lissé courant (0–1)."""
+        return self._niveau_lisse
+
+    @property
+    def niveau_cible(self) -> float:
+        """Retourne le dernier niveau audio cible reçu via ``set_niveau`` (0–1)."""
+        return self._niveau_cible
+
+    def set_niveau(self, niveau: float) -> None:
+        """Définit le niveau audio cible (0–1) modulant le rayon et le halo en douceur.
+
+        Args:
+            niveau: Amplitude normalisée (micro en écoute ou sortie Windows en parole).
+        """
+        self._niveau_cible = borner_niveau(niveau)
+
     def _ecran_disponible_tuple(self, point_ref: QPoint | None = None) -> tuple[int, int, int, int]:
         """Retourne ``(x, y, w, h)`` de la zone utile de l'écran concerné."""
         scr = QGuiApplication.screenAt(point_ref) if point_ref is not None else None
@@ -253,12 +311,16 @@ class OrbWidget(QWidget):
 
     def set_connecte(self, connecte: bool) -> None:
         """Met à jour l'état de connexion WebSocket de l'orbe."""
-        self._machine.set_connecte(connecte)
+        effectif = self._machine.set_connecte(connecte)
+        if effectif in ("repos", "deconnecte"):
+            self._niveau_cible = 0.0
         self._maj_cadence_timer()
 
     def set_etat(self, etat: str) -> None:
         """Change l'état visuel de l'orbe (``repos``, ``ecoute``, ``reflexion``, ``parole``, ``action``, ``deconnecte``)."""
-        self._machine.set_etat(etat)
+        effectif = self._machine.set_etat(etat)
+        if effectif in ("repos", "deconnecte"):
+            self._niveau_cible = 0.0
         self._maj_cadence_timer()
 
     def deplacer_pres_de(self, rect_global: QRect | None) -> None:
@@ -356,6 +418,7 @@ class OrbWidget(QWidget):
 
         preset = self._machine.preset()
         self._phase += dt * preset.vitesse_rot
+        self._niveau_lisse = lisser_niveau(self._niveau_lisse, self._niveau_cible, dt)
 
         alpha_col = 1.0 - math.exp(-dt / 0.16)
         self._couleur_courante = self._interpoler_couleur(
@@ -399,9 +462,13 @@ class OrbWidget(QWidget):
         col = self._couleur_courante
         col_sec = self._couleur_sec_courante
         puls = math.sin(ecoule * preset.freq_pulsation)
+        niv = self._niveau_lisse
 
-        # 1. Halo radial externe.
-        rayon_halo = (w * 0.48) * (1.0 + puls * preset.amplitude_pulsation * 0.4)
+        # 1. Halo radial externe modulé par l'amplitude vocale.
+        rayon_halo = min(
+            w * 0.495,
+            (w * 0.46) * (1.0 + puls * preset.amplitude_pulsation * 0.35 + niv * 0.12),
+        )
         halo = QRadialGradient(cx, cy, rayon_halo)
         c0 = QColor(col)
         c0.setAlpha(95 if etat != "deconnecte" else 42)
@@ -445,8 +512,8 @@ class OrbWidget(QWidget):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawEllipse(QPointF(cx, cy), r_onde, r_onde)
 
-        # 4. Sphère principale dégradée (obsidian + reflet spéculaire).
-        rayon_sphere = 28.0 * (1.0 + puls * preset.amplitude_pulsation * 0.55)
+        # 4. Sphère principale dégradée (obsidian + reflet spéculaire) modulée par le niveau.
+        rayon_sphere = 28.0 * (1.0 + puls * preset.amplitude_pulsation * 0.45 + niv * 0.18)
         grad_sphere = QRadialGradient(cx - rayon_sphere * 0.30, cy - rayon_sphere * 0.32, rayon_sphere * 1.45)
         reflet = QColor(232, 248, 255) if etat != "deconnecte" else QColor(148, 163, 184)
         grad_sphere.setColorAt(0.0, reflet)
@@ -464,8 +531,9 @@ class OrbWidget(QWidget):
         if etat == "parole":
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor(248, 250, 252, 225))
+            echelle_barre = 0.45 + 0.55 * max(niv, 0.15)
             for idx, offset_x in enumerate((-10.0, -3.5, 3.5, 10.0)):
-                hauteur_b = 7.0 + 11.0 * abs(math.sin(ecoule * 10.5 + idx * 1.1))
+                hauteur_b = 5.0 + 13.0 * echelle_barre * abs(math.sin(ecoule * 10.5 + idx * 1.1))
                 painter.drawRoundedRect(
                     QRectF(cx + offset_x - 1.8, cy - hauteur_b / 2.0, 3.6, hauteur_b),
                     1.8,

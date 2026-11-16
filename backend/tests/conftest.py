@@ -19,7 +19,7 @@ atexit.register(lambda: shutil.rmtree(_BOOT_ROOT, ignore_errors=True))
 
 from backend import config, db, security  # noqa: E402
 from backend.agents import agent_runtime  # noqa: E402
-from backend.api import chat, setup  # noqa: E402
+from backend.api import chat, setup, voix_ws  # noqa: E402
 from backend.jarvis_engine import approvals, teacher  # noqa: E402
 from backend.llm import agy_engine, claude_engine, quota, router  # noqa: E402
 from backend.logging_setup import shutdown_logging  # noqa: E402
@@ -32,6 +32,7 @@ from backend.ws_hub import hub  # noqa: E402
 def jarvis_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     """Fournit une racine ``JARVIS_ROOT`` et un ``APP_DIR`` isolés et réinitialise les singletons."""
     ancien_app_dir = config.APP_DIR
+    ancien_root = config.ROOT
     monkeypatch.setenv("JARVIS_TEST", "1")
     monkeypatch.setenv("JARVIS_ROOT", str(tmp_path))
     config.refresh_paths(tmp_path, app_dir=tmp_path)
@@ -47,6 +48,7 @@ def jarvis_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pat
     approvals.reset_etat_pour_tests()
     teacher.reset_etat_pour_tests()
     setup.reset_etat_pour_tests()
+    voix_ws.reset_etat_pour_tests()
     maj_service.reset_etat_pour_tests()
     hub.reset()
 
@@ -62,10 +64,11 @@ def jarvis_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pat
         approvals.reset_etat_pour_tests()
         teacher.reset_etat_pour_tests()
         setup.reset_etat_pour_tests()
+        voix_ws.reset_etat_pour_tests()
         maj_service.reset_etat_pour_tests()
         hub.reset()
         shutdown_logging()
-        config.refresh_paths(app_dir=ancien_app_dir)
+        config.refresh_paths(nouveau_root=ancien_root, app_dir=ancien_app_dir)
 
 
 @pytest.fixture

@@ -15,7 +15,7 @@ from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDiscon
 from fastapi.responses import FileResponse, HTMLResponse
 
 from backend import __version__, bootstrap, config, db, security, settings_store
-from backend.api import chat, moteurs, sante
+from backend.api import chat, moteurs, sante, voix_ws
 from backend.lifecycle import executer_hooks, on_shutdown_hooks, on_startup_hooks
 from backend.llm import quota
 from backend.logging_setup import setup_logging, shutdown_logging
@@ -143,6 +143,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Jarvis AIOS", version=__version__, lifespan=_lifespan)
     app.add_middleware(SecuriteMiddleware)
     register_routers(app)
+    app.include_router(voix_ws.router)
 
     @app.websocket("/ws")
     async def websocket_endpoint(

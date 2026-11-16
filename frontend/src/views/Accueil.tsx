@@ -3,8 +3,10 @@ import { Link, useNavigate } from 'react-router-dom';
 import {
   ArrowDown,
   ArrowUp,
+  AudioWaveform,
   CheckSquare,
   ExternalLink,
+  Headphones,
   Mic,
   MicOff,
   PinOff,
@@ -13,6 +15,7 @@ import {
   SlidersHorizontal,
   Square,
   Trash2,
+  VolumeX,
   X,
 } from 'lucide-react';
 import { AgentAvatar } from '@/components/AgentAvatar';
@@ -28,6 +31,11 @@ import {
   MOTEUR_OPTIONS,
 } from '@/lib/llm';
 import type { Effort, EtatJarvis, MoteurId } from '@/lib/types';
+import {
+  ConversationVocale,
+  type ConversationVocaleSnapshot,
+  type EtatConversationVocale,
+} from '@/lib/voixTempsReel';
 import { useAgents } from '@/store/useAgents';
 import { useCartes } from '@/store/useCartes';
 import { getConversationId, useChats } from '@/store/useChats';
@@ -65,6 +73,54 @@ const ETAT_LABELS: Record<EtatJarvis, string> = {
   parole: 'Je parle',
   action: "J'agis",
 };
+
+/**
+ * Convertit l'état d'une session `ConversationVocale` vers l'état visuel de `HoloSphere`.
+ *
+ * @param etat - État courant de la conversation temps réel.
+ * @returns État `EtatJarvis` correspondant pour animer la sphère.
+ */
+function mapConversationToSphereState(etat: EtatConversationVocale): EtatJarvis {
+  switch (etat) {
+    case 'ecoute':
+    case 'parole':
+      return 'ecoute';
+    case 'connexion':
+    case 'reflexion':
+      return 'reflexion';
+    case 'reponse':
+      return 'parole';
+    case 'inactif':
+    case 'erreur':
+    default:
+      return 'repos';
+  }
+}
+
+/**
+ * Retourne le libellé affiché sous la sphère pendant une session vocale temps réel.
+ *
+ * @param etat - État courant de la conversation vocale.
+ * @returns Libellé lisible en français.
+ */
+function getConversationSphereLabel(etat: EtatConversationVocale): string {
+  switch (etat) {
+    case 'connexion':
+      return 'Connexion vocale…';
+    case 'ecoute':
+      return "Je t'écoute…";
+    case 'parole':
+      return 'Parole détectée…';
+    case 'reflexion':
+      return 'Je réfléchis…';
+    case 'reponse':
+      return 'Je parle';
+    case 'erreur':
+    case 'inactif':
+    default:
+      return 'En veille';
+  }
+}
 
 const RADAR_BRANCHES: Array<{ key: string; label: string }> = [
   { key: '00-Profil', label: 'Profil' },
@@ -225,13 +281,27 @@ export function Accueil() {
 
   const [newTaskTitle, setNewTaskTitle] = useState('');
 
-  // État enregistrement micro navigateur
+  // État enregistrement micro navigateur (talkie-walkie)
   const [isRecording, setIsRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [micError, setMicError] = useState<string | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
+
+  // État conversation vocale temps réel (/ws/voix)
+  const conversationRef = useRef<ConversationVocale | null>(null);
+  const lastConvErrorRef = useRef<string | null>(null);
+  const [convState, setConvState] = useState<ConversationVocaleSnapshot>({
+    etat: 'inactif',
+    partiel: '',
+    final: '',
+    reponse: '',
+    erreur: null,
+    erreurCode: null,
+  });
+  const isConversationActive =
+    convState.etat !== 'inactif' && convState.etat !== 'erreur';
 
   useEffect(() => {
     setMoteur(parametres.moteur);
@@ -369,26 +439,47 @@ export function Accueil() {
   }, [addToast, handleSendText]);
 
   const toggleRecording = useCallback(() => {
+    if (isConversationActive) return;
     if (isRecording) {
       stopRecording();
     } else {
       void startRecording();
     }
-  }, [isRecording, startRecording, stopRecording]);
+  }, [isConversationActive, isRecording, startRecording, stopRecording]);
+
+  const toggleConversation = useCallback(() => {
+    const conv = conversationRef.current;
+    if (!conv) return;
+    if (isConversationActive) {
+      conv.arreter();
+      return;
+    }
+    if (isRecording || transcribing) return;
+    setMicError(null);
+    void conv.demarrer({
+      agent: 'jarvis',
+      voix: parametres.voix.nom,
+    });
+  }, [isConversationActive, isRecording, transcribing, parametres.voix.nom]);
+
+  const handleInterruptConversation = useCallback(() => {
+    conversationRef.current?.interrompre();
+  }, []);
 
   // Raccourci clavier : se réabonne quand toggleRecording change, SANS toucher à l'enregistrement en cours.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey && e.code === 'Space') {
+        if (isConversationActive) return;
         e.preventDefault();
         toggleRecording();
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [toggleRecording]);
+  }, [isConversationActive, toggleRecording]);
 
-  // Libère le micro uniquement au démontage de la vue (avant : à chaque changement d'état, ce qui coupait l'enregistrement).
+  // Libère le micro talkie-walkie uniquement au démontage de la vue (avant : à chaque changement d'état, ce qui coupait l'enregistrement).
   useEffect(() => {
     return () => {
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
@@ -401,6 +492,33 @@ export function Accueil() {
       }
     };
   }, []);
+
+  // Initialise ConversationVocale et arrête automatiquement la session quand on quitte la vue.
+  useEffect(() => {
+    const conv = new ConversationVocale();
+    conversationRef.current = conv;
+    const unsubscribe = conv.subscribe((snapshot) => {
+      setConvState(snapshot);
+    });
+    return () => {
+      unsubscribe();
+      conv.arreter();
+      conversationRef.current = null;
+    };
+  }, []);
+
+  // Affiche un toast à chaque nouvelle erreur vocale (micro refusé, coupure WS, aucun moteur).
+  useEffect(() => {
+    if (convState.erreur && convState.erreur !== lastConvErrorRef.current) {
+      lastConvErrorRef.current = convState.erreur;
+      addToast(
+        convState.erreur,
+        convState.etat === 'erreur' ? 'avertissement' : 'erreur',
+      );
+    } else if (!convState.erreur) {
+      lastConvErrorRef.current = null;
+    }
+  }, [convState.erreur, convState.etat, addToast]);
 
   const toggleWidget = (id: WidgetId) => {
     setWidgets((prev) =>
@@ -430,7 +548,14 @@ export function Accueil() {
     }
   };
 
-  const effectiveSphereState: EtatJarvis = isRecording ? 'ecoute' : etatJarvis;
+  const effectiveSphereState: EtatJarvis = isRecording
+    ? 'ecoute'
+    : isConversationActive
+      ? mapConversationToSphereState(convState.etat)
+      : etatJarvis;
+  const sphereLabel = isConversationActive
+    ? getConversationSphereLabel(convState.etat)
+    : ETAT_LABELS[effectiveSphereState];
   const recentMessages = messages.slice(-4);
   const pinnedCartes = cartes.filter((c) => Boolean(c.epinglee));
 
@@ -695,52 +820,146 @@ export function Accueil() {
             />
           </div>
 
-          <div className="mt-1 text-center">
+          <div className="mt-1 w-full text-center">
             <p className="font-display text-base font-semibold tracking-wide text-[#f8fafc]">
-              {ETAT_LABELS[effectiveSphereState]}
+              {sphereLabel}
             </p>
-            <p className="mt-1 min-h-[1.25rem] max-w-md text-xs text-[#94a3b8]">
-              {narration?.texte ?? 'Prêt à recevoir vos instructions.'}
-            </p>
+            {isConversationActive ? (
+              <div
+                className="mx-auto mt-1.5 min-h-[1.75rem] max-w-md px-2"
+                aria-live="polite"
+              >
+                {convState.partiel ? (
+                  <p className="break-words text-sm font-medium text-[#f8fafc]">
+                    « {convState.partiel}
+                    <span
+                      className="ml-0.5 inline-block animate-pulse text-[var(--accent)]"
+                      aria-hidden="true"
+                    >
+                      ▍
+                    </span>
+                    »
+                  </p>
+                ) : convState.final ? (
+                  <p className="break-words text-xs text-[#cbd5e1]">
+                    « {convState.final} »
+                  </p>
+                ) : (
+                  <p className="text-xs text-[#94a3b8]">
+                    Parlez naturellement, Jarvis vous écoute.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <p className="mx-auto mt-1 min-h-[1.25rem] max-w-md text-xs text-[#94a3b8]">
+                {narration?.texte ?? 'Prêt à recevoir vos instructions.'}
+              </p>
+            )}
           </div>
 
-          {/* Bouton micro + raccourci Ctrl+Espace */}
-          <div className="mt-4 flex flex-col items-center gap-2">
-            <button
-              type="button"
-              onClick={toggleRecording}
-              disabled={transcribing}
-              aria-label={
-                isRecording
-                  ? "Arrêter l'écoute vocale"
-                  : 'Parler à Jarvis (Ctrl+Espace)'
-              }
-              className={cn(
-                'flex h-13 w-13 items-center justify-center rounded-full border transition',
-                isRecording
-                  ? 'border-[#f87171] bg-[#f87171]/20 text-[#f87171] shadow-lg shadow-[#f87171]/25'
-                  : 'border-[var(--accent)]/60 bg-[var(--accent)]/15 text-[var(--accent)] hover:bg-[var(--accent)]/25',
-                transcribing && 'opacity-60',
+          {/* Boutons vocaux : talkie-walkie (Ctrl+Espace) + Conversation mains libres + Couper */}
+          <div className="mt-4 flex w-full flex-col items-center gap-2">
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              <button
+                type="button"
+                onClick={toggleRecording}
+                disabled={transcribing || isConversationActive}
+                aria-label={
+                  isRecording
+                    ? "Arrêter l'écoute vocale"
+                    : isConversationActive
+                      ? 'Talkie-walkie désactivé pendant le mode Conversation'
+                      : 'Parler à Jarvis (Ctrl+Espace)'
+                }
+                className={cn(
+                  'flex h-13 w-13 items-center justify-center rounded-full border transition',
+                  isRecording
+                    ? 'border-[#f87171] bg-[#f87171]/20 text-[#f87171] shadow-lg shadow-[#f87171]/25'
+                    : 'border-[var(--accent)]/60 bg-[var(--accent)]/15 text-[var(--accent)] hover:bg-[var(--accent)]/25',
+                  (transcribing || isConversationActive) &&
+                    'cursor-not-allowed opacity-40 hover:bg-[var(--accent)]/15',
+                )}
+              >
+                {isRecording ? (
+                  <Square className="h-5 w-5" />
+                ) : micError ? (
+                  <MicOff className="h-5 w-5" />
+                ) : (
+                  <Mic className="h-5 w-5" />
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={toggleConversation}
+                disabled={isRecording || transcribing}
+                aria-pressed={isConversationActive}
+                aria-label={
+                  isConversationActive
+                    ? 'Arrêter le mode Conversation'
+                    : 'Démarrer le mode Conversation vocale en continu'
+                }
+                className={cn(
+                  'inline-flex h-11 items-center gap-2 rounded-full border px-4 text-xs font-medium transition',
+                  isConversationActive
+                    ? 'border-[#34d399]/70 bg-[#34d399]/15 text-[#34d399] shadow-lg shadow-[#34d399]/15 hover:bg-[#34d399]/25'
+                    : 'border-white/15 bg-[#05070d]/80 text-[#e2e8f0] hover:border-[var(--accent)]/60 hover:text-[var(--accent)]',
+                  (isRecording || transcribing) &&
+                    'cursor-not-allowed opacity-40',
+                )}
+              >
+                {isConversationActive ? (
+                  <>
+                    <AudioWaveform className="h-4 w-4 animate-pulse" />
+                    <span>Conversation</span>
+                    <span
+                      className="h-2 w-2 rounded-full bg-[#34d399] animate-pulse"
+                      aria-hidden="true"
+                    />
+                  </>
+                ) : (
+                  <>
+                    <Headphones className="h-4 w-4" />
+                    <span>Conversation</span>
+                  </>
+                )}
+              </button>
+
+              {convState.etat === 'reponse' && (
+                <button
+                  type="button"
+                  onClick={handleInterruptConversation}
+                  aria-label="Couper la réponse vocale de Jarvis"
+                  className="inline-flex h-11 items-center gap-1.5 rounded-full border border-[#f59e0b]/60 bg-[#f59e0b]/15 px-4 text-xs font-medium text-[#f59e0b] transition hover:bg-[#f59e0b]/25"
+                >
+                  <VolumeX className="h-4 w-4" />
+                  <span>Couper</span>
+                </button>
               )}
-            >
-              {isRecording ? (
-                <Square className="h-5 w-5" />
-              ) : micError ? (
-                <MicOff className="h-5 w-5" />
-              ) : (
-                <Mic className="h-5 w-5" />
-              )}
-            </button>
-            <span className="font-mono text-[10px] text-[#64748b]">
-              {transcribing
-                ? 'Transcription en cours…'
-                : isRecording
-                  ? 'Enregistrement… cliquez pour envoyer'
-                  : 'Ctrl+Espace pour parler'}
+            </div>
+
+            <span className="text-center font-mono text-[10px] text-[#64748b]">
+              {isConversationActive
+                ? convState.etat === 'connexion'
+                  ? 'Initialisation du micro et de la voix…'
+                  : 'Mode Conversation actif — cliquez pour arrêter'
+                : transcribing
+                  ? 'Transcription en cours…'
+                  : isRecording
+                    ? 'Enregistrement… cliquez pour envoyer'
+                    : 'Ctrl+Espace pour parler'}
             </span>
             {micError && (
               <p className="max-w-sm text-center text-xs text-[#f59e0b]">
                 {micError}
+              </p>
+            )}
+            {convState.erreur && (
+              <p
+                role="alert"
+                className="max-w-sm text-center text-xs text-[#f59e0b]"
+              >
+                {convState.erreur}
               </p>
             )}
           </div>

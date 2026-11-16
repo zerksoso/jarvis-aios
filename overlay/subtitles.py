@@ -112,6 +112,25 @@ class SubtitlesBubble(QWidget):
         if self._tampon_chat.strip():
             self.afficher_texte(self._tampon_chat)
 
+    def on_voix_partiel(self, texte: str) -> None:
+        """Affiche en direct la transcription partielle de la parole utilisateur."""
+        self._tampon_chat = ""
+        if texte.strip():
+            self.afficher_texte(texte)
+
+    def on_voix_final(self, texte: str) -> None:
+        """Affiche la transcription finale de l'utilisateur et réinitialise le tampon de réponse."""
+        self._tampon_chat = ""
+        if texte.strip():
+            self.afficher_texte(texte)
+
+    def on_voix_reponse_delta(self, delta: str) -> None:
+        """Ajoute un fragment de réponse vocale ``reponse_delta`` et met à jour la bulle en direct."""
+        if not delta:
+            return
+        self._tampon_chat += delta
+        self.afficher_texte(self._tampon_chat)
+
     def afficher_texte(self, texte: str) -> None:
         """Met en forme le texte sur 2 lignes max, affiche la bulle et relance le fondu 6 s."""
         propre = compacter_texte_sous_titre(texte)

@@ -18,6 +18,7 @@ from overlay.hud_layer import HudLayer
 from overlay.orb import OrbWidget
 from overlay.subtitles import SubtitlesBubble
 from overlay.voice import GlobalHotkeyListener, VoiceOrchestrator
+from overlay.voice_stream import ConversationVocaleOverlay
 from overlay.win32_utils import activer_dpi
 
 DASHBOARD_URL = "http://127.0.0.1:5230"
@@ -125,6 +126,7 @@ def main() -> int:
 
     client = JarvisClient(token_path=runtime_dir / "token.txt")
     hotkey = GlobalHotkeyListener()
+    voice_stream = ConversationVocaleOverlay(token_path=runtime_dir / "token.txt")
     orchestrator = VoiceOrchestrator(
         client=client,
         hud=hud,
@@ -132,6 +134,7 @@ def main() -> int:
         subtitles=subtitles,
         cards=cards,
         hotkey=hotkey,
+        voice_stream=voice_stream,
     )
 
     # Connexions visuelles entre l'orbe, les sous-titres et le calque de guidage.
@@ -161,6 +164,40 @@ def main() -> int:
 
     action_orbe.triggered.connect(_basculer_orbe)
     menu.addAction(action_orbe)
+
+    action_continu = QAction("Mode conversation continue", menu)
+    action_continu.setCheckable(True)
+    action_continu.setChecked(False)
+
+    def _basculer_mode_continu(coche: bool) -> None:
+        nouveau_mode = "continu" if coche else "push"
+        orchestrator.set_mode_declenchement(nouveau_mode)
+        client.requete_http_async(
+            "PUT",
+            "/api/parametres",
+            payload={"voix": {"declenchement": nouveau_mode}},
+            timeout=5.0,
+            on_error=lambda exc: logger.warning(
+                "Impossible d'enregistrer voix.declenchement : %s", exc
+            ),
+        )
+
+    def _sync_action_continu(mode: str) -> None:
+        bloquer = action_continu.blockSignals(True)
+        action_continu.setChecked(mode == "continu")
+        action_continu.blockSignals(bloquer)
+
+    action_continu.triggered.connect(_basculer_mode_continu)
+    orchestrator.mode_declenchement_change.connect(_sync_action_continu)
+    orchestrator.notification_demandee.connect(
+        lambda titre, msg: tray.showMessage(
+            titre,
+            msg,
+            QSystemTrayIcon.MessageIcon.Information,
+            4000,
+        )
+    )
+    menu.addAction(action_continu)
 
     action_effacer = QAction("Effacer les cadres", menu)
     action_effacer.triggered.connect(lambda: hud.effacer_guide(None))

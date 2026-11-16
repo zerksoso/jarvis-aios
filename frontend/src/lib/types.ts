@@ -203,6 +203,45 @@ export interface MoteursPayload {
   moteurs?: Record<string, MoteurDisponibilite>;
 }
 
+/** Moteur de synthèse vocale utilisé pour les réponses parlées. */
+export type MoteurTts = 'edge' | 'windows' | 'http';
+
+/** Modèle Whisper local utilisé pour la transcription. */
+export type SttModele = 'large-v3-turbo' | 'medium' | 'small';
+
+/** Mode de déclenchement de l'écoute vocale. */
+export type DeclenchementVoix = 'push' | 'continu';
+
+/** Paramètres vocaux et audio (`parametres.json` -> `voix`). */
+export interface VoixParametres {
+  active: boolean;
+  nom: string;
+  moteur_tts: MoteurTts;
+  tts_url: string | null;
+  stt_modele: SttModele;
+  stt_beam_final: number;
+  declenchement: DeclenchementVoix;
+  micro: string | null;
+  rapide: boolean;
+  modele_rapide: string;
+}
+
+/** Périphérique microphone renvoyé par `GET /api/voix/micros`. */
+export interface VoixMicro {
+  index: number;
+  nom: string;
+  defaut: boolean;
+}
+
+/** État du pipeline vocal renvoyé par `GET /api/voix/etat`. */
+export interface VoixEtat {
+  stt_modele: SttModele | string;
+  stt_peripherique: 'cuda' | 'cpu' | string;
+  stt_charge: boolean;
+  tts_moteur: MoteurTts | string;
+  tts_http_joignable: boolean | null;
+}
+
 /** Paramètres globaux persistés (`RUNTIME/parametres.json`). */
 export interface Parametres {
   moteur: MoteurId;
@@ -210,10 +249,7 @@ export interface Parametres {
   effort: Effort;
   verbosite: 'normal' | 'concis' | 'detaille';
   accent: string;
-  voix: {
-    active: boolean;
-    nom: string;
-  };
+  voix: VoixParametres;
   raccourci: string;
   memoire_auto: boolean;
 }

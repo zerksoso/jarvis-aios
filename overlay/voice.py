@@ -16,6 +16,7 @@ from overlay.client import BASE_HTTP_URL, JarvisClient
 from overlay.hud_layer import HudLayer
 from overlay.orb import OrbWidget
 from overlay.subtitles import SubtitlesBubble
+from overlay.voice_stream import ConversationVocaleOverlay
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +122,10 @@ class GlobalHotkeyListener(QObject):
 
 
 class VoiceOrchestrator(QObject):
-    """Orchestre les événements WS, le déclenchement vocal, la lecture TTS et les approbations."""
+    """Orchestre les événements WS, le déclenchement vocal streaming/talkie-walkie et les approbations."""
+
+    mode_declenchement_change = Signal(str)
+    notification_demandee = Signal(str, str)
 
     def __init__(
         self,
@@ -131,9 +135,10 @@ class VoiceOrchestrator(QObject):
         subtitles: SubtitlesBubble,
         cards: CardsContainer,
         hotkey: GlobalHotkeyListener,
+        voice_stream: ConversationVocaleOverlay | None = None,
         parent: QObject | None = None,
     ) -> None:
-        """Relie les signaux du client WS, du raccourci, des widgets HUD et du lecteur audio."""
+        """Relie les signaux du client WS, du raccourci, des widgets HUD et du module vocal."""
         super().__init__(parent)
         self._client = client
         self._hud = hud
@@ -141,8 +146,10 @@ class VoiceOrchestrator(QObject):
         self._subtitles = subtitles
         self._cards = cards
         self._hotkey = hotkey
+        self._voice_stream = voice_stream
 
         self._en_ecoute = False
+        self._mode_declenchement = "push"
 
         self._audio_output = QAudioOutput(self)
         self._audio_output.setVolume(1.0)
@@ -151,6 +158,15 @@ class VoiceOrchestrator(QObject):
         self._player.playbackStateChanged.connect(self._on_playback_state_changed)
         self._player.errorOccurred.connect(self._on_media_error)
 
+        if self._voice_stream is not None:
+            self._voice_stream.etat_change.connect(self._orb.set_etat)
+            self._voice_stream.niveau.connect(self._orb.set_niveau)
+            self._voice_stream.partiel.connect(self._subtitles.on_voix_partiel)
+            self._voice_stream.final.connect(self._subtitles.on_voix_final)
+            self._voice_stream.reponse_delta.connect(self._subtitles.on_voix_reponse_delta)
+            self._voice_stream.erreur.connect(self._subtitles.on_narration)
+            self._voice_stream.repli_demande.connect(self._on_repli_talkie_walkie)
+
         self._client.connecte_change.connect(self._on_connecte_change)
         self._client.message_recu.connect(self.traiter_message_ws)
         self._hotkey.declenche.connect(self.basculer_ecoute)
@@ -158,19 +174,76 @@ class VoiceOrchestrator(QObject):
         self._cards.epingler_demande.connect(self._on_carte_epingler)
         self._cards.approbation_repondue.connect(self._on_approbation_repondue)
 
+    @property
+    def mode_declenchement(self) -> str:
+        """Retourne le mode vocal configuré (``"push"`` ou ``"continu"``)."""
+        return self._mode_declenchement
+
+    def set_mode_declenchement(self, mode: str) -> None:
+        """Met à jour le mode de déclenchement vocal (``"push"`` ou ``"continu"``)."""
+        normalise = "continu" if str(mode).strip().lower() == "continu" else "push"
+        self._mode_declenchement = normalise
+        if self._voice_stream is not None:
+            self._voice_stream.set_mode(normalise)
+        self.mode_declenchement_change.emit(normalise)
+
     def arreter(self) -> None:
-        """Interrompt toute lecture audio en cours lors de la fermeture de l'overlay."""
+        """Interrompt toute capture/lecture audio en cours lors de la fermeture de l'overlay."""
         self._en_ecoute = False
         self._player.stop()
+        if self._voice_stream is not None:
+            self._voice_stream.arreter()
 
     def _on_connecte_change(self, connecte: bool) -> None:
-        """Synchronise l'état de connexion sur l'orbe."""
+        """Synchronise l'état de connexion sur l'orbe et charge ``voix.declenchement``."""
         self._orb.set_connecte(connecte)
         if not connecte:
             self._en_ecoute = False
+            if self._voice_stream is not None and self._voice_stream.est_active:
+                self._voice_stream.arreter()
+            return
+        self._client.get_async(
+            "/api/parametres",
+            timeout=5.0,
+            on_success=self._synchroniser_parametres_voix,
+        )
+
+    def _synchroniser_parametres_voix(self, parametres: Any) -> None:
+        """Synchronise ``voix.declenchement`` depuis ``GET /api/parametres``."""
+        if not isinstance(parametres, dict):
+            return
+        voix_cfg = parametres.get("voix")
+        if isinstance(voix_cfg, dict) and "declenchement" in voix_cfg:
+            self.set_mode_declenchement(str(voix_cfg.get("declenchement") or "push"))
 
     def basculer_ecoute(self) -> None:
-        """Démarre l'écoute micro backend, ou l'interrompt proprement si déjà active."""
+        """Démarre ou arrête la conversation vocale streaming (ou le talkie-walkie en repli)."""
+        if self._voice_stream is not None:
+            if self._voice_stream.est_active:
+                self._voice_stream.arreter()
+                return
+            if not self._client.est_connecte:
+                self._subtitles.on_narration("Serveur Jarvis hors ligne — reconnexion en cours…")
+                return
+            self._player.stop()
+            self._voice_stream.demarrer(mode=self._mode_declenchement)
+            return
+
+        self._basculer_ecoute_talkie_walkie()
+
+    def _on_repli_talkie_walkie(self, raison: str) -> None:
+        """Bascule automatiquement vers le talkie-walkie historique si ``/ws/voix`` échoue."""
+        logger.warning("Repli talkie-walkie déclenché : %s", raison)
+        self.notification_demandee.emit(
+            "Jarvis Overlay — Mode repli",
+            "Conversation streaming (/ws/voix) indisponible : bascule sur le mode talkie-walkie.",
+        )
+        self._subtitles.on_narration("Mode streaming indisponible — bascule sur le talkie-walkie.")
+        if self._client.est_connecte:
+            self._basculer_ecoute_talkie_walkie()
+
+    def _basculer_ecoute_talkie_walkie(self) -> None:
+        """Démarre l'écoute micro HTTP historique, ou l'interrompt si déjà active."""
         if self._en_ecoute:
             self._client.envoyer_ws("ecoute", {"action": "fin"})
             return
@@ -223,6 +296,16 @@ class VoiceOrchestrator(QObject):
         msg_type = env.get("type")
         data = env.get("data")
         if not isinstance(msg_type, str) or not isinstance(data, dict):
+            return
+
+        stream_actif = self._voice_stream is not None and self._voice_stream.est_active
+        if stream_actif and msg_type in (
+            "etat_jarvis",
+            "chat_debut",
+            "chat_delta",
+            "chat_fin",
+            "voix_parler",
+        ):
             return
 
         if msg_type == "etat_jarvis":

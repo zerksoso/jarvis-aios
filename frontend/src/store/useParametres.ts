@@ -1,6 +1,10 @@
 import { create } from 'zustand';
 import { api } from '@/lib/api';
-import type { Parametres } from '@/lib/types';
+import type { Parametres, VoixParametres } from '@/lib/types';
+
+export type ParametresPatch = Omit<Partial<Parametres>, 'voix'> & {
+  voix?: Partial<VoixParametres>;
+};
 
 const DEFAULT_PARAMETRES: Parametres = {
   moteur: 'auto',
@@ -10,7 +14,15 @@ const DEFAULT_PARAMETRES: Parametres = {
   accent: '#22d3ee',
   voix: {
     active: true,
-    nom: 'fr-FR-DeniseNeural',
+    nom: 'fr-FR-HenriNeural',
+    moteur_tts: 'edge',
+    tts_url: null,
+    stt_modele: 'small',
+    stt_beam_final: 5,
+    declenchement: 'push',
+    micro: null,
+    rapide: true,
+    modele_rapide: 'gemini-4-hydrogen-low',
   },
   raccourci: 'ctrl+space',
   memoire_auto: true,
@@ -33,7 +45,7 @@ interface ParametresState {
   loaded: boolean;
   saving: boolean;
   fetchParametres: () => Promise<void>;
-  updateParametres: (partiel: Partial<Parametres>) => Promise<Parametres>;
+  updateParametres: (partiel: ParametresPatch) => Promise<Parametres>;
 }
 
 /**

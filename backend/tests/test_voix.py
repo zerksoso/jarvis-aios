@@ -115,6 +115,7 @@ def test_stt_chargement_paresseux_repli_cpu_et_liberation(
     """Vérifie le repli CUDA -> CPU int8, le singleton verrouillé et liberer()."""
     stt.set_modele_for_tests(None)
     stt.liberer()
+    monkeypatch.setattr(stt, "cuda_disponible", lambda: False)
 
     appels_init: list[tuple[str, str, str]] = []
     appels_transcribe: list[tuple[str, str | None, bool]] = []

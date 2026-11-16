@@ -37,6 +37,8 @@ FICHIERS_AUTORISES: tuple[str, ...] = (
     "ARCHITECTURE.md",
     "ARCHITECTURE-DOMAINES.md",
     "ARCHITECTURE-DISTRIB.md",
+    "ARCHITECTURE-VOIX.md",
+    "setup_voice.py",
 )
 
 DOSSIERS_EXCLUS_PARTOUT: frozenset[str] = frozenset(

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, useParams } from 'react-router-dom';
 import {
   CheckCircle2,
@@ -7,7 +7,9 @@ import {
   Download,
   Info,
   LoaderCircle,
+  Mic,
   Palette,
+  Play,
   Plus,
   RefreshCw,
   Save,
@@ -16,17 +18,26 @@ import {
   XCircle,
 } from 'lucide-react';
 import type { MajMode } from '@/api/maj';
-import { api } from '@/lib/api';
+import { api, getToken } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import {
   EFFORT_OPTIONS,
   getModelAvailability,
   MOTEUR_OPTIONS,
 } from '@/lib/llm';
-import type { Effort, Memoire, MoteurId, Parametres } from '@/lib/types';
+import type {
+  DeclenchementVoix,
+  Effort,
+  Memoire,
+  MoteurId,
+  Parametres,
+  SttModele,
+  VoixEtat,
+  VoixMicro,
+} from '@/lib/types';
 import { useMaj } from '@/store/useMaj';
 import { useMoteurs } from '@/store/useMoteurs';
-import { useParametres } from '@/store/useParametres';
+import { type ParametresPatch, useParametres } from '@/store/useParametres';
 import { useToasts } from '@/store/useToasts';
 
 const ACCENT_PRESETS = [
@@ -39,9 +50,90 @@ const ACCENT_PRESETS = [
 ];
 
 const VOIX_OPTIONS = [
-  { id: 'fr-FR-DeniseNeural', label: 'Denise (fr-FR-DeniseNeural)' },
   { id: 'fr-FR-HenriNeural', label: 'Henri (fr-FR-HenriNeural)' },
+  { id: 'fr-FR-DeniseNeural', label: 'Denise (fr-FR-DeniseNeural)' },
 ];
+
+type VoixPresetId = 'edge-henri' | 'edge-denise' | 'windows' | 'http';
+
+const VOIX_PRESETS: Array<{
+  id: VoixPresetId;
+  label: string;
+  desc: string;
+}> = [
+  {
+    id: 'edge-henri',
+    label: 'Henri (fr-FR-HenriNeural)',
+    desc: 'Voix Edge-TTS naturelle masculine (par défaut).',
+  },
+  {
+    id: 'edge-denise',
+    label: 'Denise (fr-FR-DeniseNeural)',
+    desc: 'Voix Edge-TTS naturelle féminine.',
+  },
+  {
+    id: 'windows',
+    label: 'Windows locale (SAPI5)',
+    desc: 'Synthèse locale 100 % hors ligne via pyttsx3.',
+  },
+  {
+    id: 'http',
+    label: 'Serveur local HTTP',
+    desc: 'Serveur compatible OpenAI (/v1/audio/speech, ex. KugelAudio) avec repli.',
+  },
+];
+
+const STT_MODELES: Array<{
+  id: SttModele;
+  label: string;
+  taille: string;
+  note: string;
+}> = [
+  {
+    id: 'large-v3-turbo',
+    label: 'Large v3 Turbo',
+    taille: '~1,6 Go',
+    note: 'Précision maximale et rapide avec GPU CUDA (recommandé NVIDIA).',
+  },
+  {
+    id: 'medium',
+    label: 'Medium',
+    taille: '~1,5 Go',
+    note: 'Très bonne précision, plus exigeant sur CPU seul.',
+  },
+  {
+    id: 'small',
+    label: 'Small',
+    taille: '~500 Mo',
+    note: 'Léger et fluide sur processeur (CPU) sans carte graphique dédiée.',
+  },
+];
+
+const DECLENCHEMENT_OPTIONS: Array<{
+  id: DeclenchementVoix;
+  label: string;
+  desc: string;
+}> = [
+  {
+    id: 'push',
+    label: 'Push-to-talk',
+    desc: 'Parler via le raccourci (Ctrl+Espace) ou le bouton micro.',
+  },
+  {
+    id: 'continu',
+    label: 'Conversation continue',
+    desc: 'Écoute mains libres avec détection de parole et coupure instantanée.',
+  },
+];
+
+/**
+ * Déduit l'identifiant de préréglage TTS affiché dans la section « Voix & Audio ».
+ */
+function getVoixPresetId(voix: Parametres['voix']): VoixPresetId {
+  if (voix.moteur_tts === 'windows') return 'windows';
+  if (voix.moteur_tts === 'http') return 'http';
+  return voix.nom === 'fr-FR-DeniseNeural' ? 'edge-denise' : 'edge-henri';
+}
 
 const MEMOIRE_TYPES: Array<{ id: Memoire['type']; label: string }> = [
   { id: 'preference', label: 'Préférence' },
@@ -82,12 +174,15 @@ function formatMajDate(iso: string | null): string {
 }
 
 /**
- * Vue `#/parametres/:section` : Personnalisation, Mémoire, Modèles par défaut et Mises à jour.
+ * Vue `#/parametres/:section` : Personnalisation, Voix & Audio, Mémoire, Modèles par défaut et Mises à jour.
  */
 export function ParametresView() {
   const { section = 'personnalisation' } = useParams<{ section?: string }>();
   const activeSection =
-    section === 'memoire' || section === 'modeles' || section === 'maj'
+    section === 'voix' ||
+    section === 'memoire' ||
+    section === 'modeles' ||
+    section === 'maj'
       ? section
       : 'personnalisation';
 
@@ -115,6 +210,15 @@ export function ParametresView() {
 
   const [draft, setDraft] = useState<Parametres>(parametres);
 
+  // État section Voix & Audio
+  const [micros, setMicros] = useState<VoixMicro[]>([]);
+  const [loadingMicros, setLoadingMicros] = useState(false);
+  const [voixEtat, setVoixEtat] = useState<VoixEtat | null>(null);
+  const [loadingVoixEtat, setLoadingVoixEtat] = useState(false);
+  const [testingVoice, setTestingVoice] = useState(false);
+  const testAudioRef = useRef<HTMLAudioElement | null>(null);
+  const testAudioUrlRef = useRef<string | null>(null);
+
   // État section Mémoire
   const [memoires, setMemoires] = useState<Memoire[]>([]);
   const [loadingMemoires, setLoadingMemoires] = useState(false);
@@ -124,6 +228,44 @@ export function ParametresView() {
   useEffect(() => {
     setDraft(parametres);
   }, [parametres]);
+
+  const stopTestAudio = useCallback(() => {
+    if (testAudioRef.current) {
+      testAudioRef.current.pause();
+      testAudioRef.current.onended = null;
+      testAudioRef.current.onerror = null;
+      testAudioRef.current = null;
+    }
+    if (testAudioUrlRef.current) {
+      URL.revokeObjectURL(testAudioUrlRef.current);
+      testAudioUrlRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      stopTestAudio();
+    };
+  }, [stopTestAudio]);
+
+  const loadVoixInfos = useCallback(async () => {
+    setLoadingMicros(true);
+    setLoadingVoixEtat(true);
+    const [microsRes, etatRes] = await Promise.allSettled([
+      api.get<VoixMicro[]>('/api/voix/micros', { silent: true }),
+      api.get<VoixEtat>('/api/voix/etat', { silent: true }),
+    ]);
+    if (microsRes.status === 'fulfilled' && Array.isArray(microsRes.value)) {
+      setMicros(microsRes.value);
+    } else {
+      setMicros([]);
+    }
+    if (etatRes.status === 'fulfilled' && etatRes.value) {
+      setVoixEtat(etatRes.value);
+    }
+    setLoadingMicros(false);
+    setLoadingVoixEtat(false);
+  }, []);
 
   const loadMemoires = useCallback(async () => {
     setLoadingMemoires(true);
@@ -138,21 +280,144 @@ export function ParametresView() {
   }, []);
 
   useEffect(() => {
-    if (activeSection === 'memoire') {
+    if (activeSection === 'voix') {
+      void loadVoixInfos();
+    } else if (activeSection === 'memoire') {
       void loadMemoires();
     } else if (activeSection === 'modeles') {
       void fetchMoteurs();
     } else if (activeSection === 'maj') {
       void fetchMajEtat({ silent: true });
     }
-  }, [activeSection, loadMemoires, fetchMoteurs, fetchMajEtat]);
+  }, [activeSection, loadVoixInfos, loadMemoires, fetchMoteurs, fetchMajEtat]);
 
-  const savePartial = async (partiel: Partial<Parametres>, successMsg: string) => {
+  const savePartial = async (partiel: ParametresPatch, successMsg: string) => {
     try {
       await updateParametres(partiel);
       addToast(successMsg, 'succes');
+      return true;
     } catch {
       // Erreur notifiée par toast global
+      return false;
+    }
+  };
+
+  const handleSelectVoixPreset = (presetId: VoixPresetId) => {
+    setDraft((prev) => {
+      const nextVoix = { ...prev.voix };
+      if (presetId === 'edge-henri') {
+        nextVoix.moteur_tts = 'edge';
+        nextVoix.nom = 'fr-FR-HenriNeural';
+      } else if (presetId === 'edge-denise') {
+        nextVoix.moteur_tts = 'edge';
+        nextVoix.nom = 'fr-FR-DeniseNeural';
+      } else if (presetId === 'windows') {
+        nextVoix.moteur_tts = 'windows';
+      } else {
+        nextVoix.moteur_tts = 'http';
+      }
+      return { ...prev, voix: nextVoix };
+    });
+  };
+
+  const handleSaveVoix = async () => {
+    const cleanUrl = (draft.voix.tts_url ?? '').trim();
+    if (
+      draft.voix.moteur_tts === 'http' &&
+      (!cleanUrl || (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')))
+    ) {
+      addToast(
+        'Indique une URL http:// ou https:// valide pour le serveur TTS local.',
+        'erreur',
+      );
+      return;
+    }
+    const ok = await savePartial(
+      {
+        voix: {
+          ...draft.voix,
+          tts_url: cleanUrl || null,
+          micro: draft.voix.micro?.trim() || null,
+        },
+      },
+      'Paramètres voix & audio enregistrés.',
+    );
+    if (ok) {
+      void loadVoixInfos();
+    }
+  };
+
+  const handleTestVoice = async () => {
+    const cleanUrl = (draft.voix.tts_url ?? '').trim();
+    if (
+      draft.voix.moteur_tts === 'http' &&
+      (!cleanUrl || (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')))
+    ) {
+      addToast(
+        'Indique une URL http:// ou https:// valide avant de tester le serveur TTS.',
+        'avertissement',
+      );
+      return;
+    }
+
+    stopTestAudio();
+    setTestingVoice(true);
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      const token = getToken();
+      if (token) {
+        headers['X-Jarvis-Token'] = token;
+      }
+      const response = await fetch('/api/voix/tester', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          voix: draft.voix.nom,
+          moteur_tts: draft.voix.moteur_tts,
+          tts_url: cleanUrl || null,
+        }),
+      });
+      if (!response.ok) {
+        let detail = `Échec du test vocal (HTTP ${response.status})`;
+        try {
+          const errData = (await response.json()) as { detail?: string };
+          if (typeof errData?.detail === 'string' && errData.detail.trim()) {
+            detail = errData.detail;
+          }
+        } catch {
+          // Garde le message HTTP par défaut.
+        }
+        addToast(detail, 'erreur');
+        return;
+      }
+
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const audio = new Audio(objectUrl);
+      testAudioUrlRef.current = objectUrl;
+      testAudioRef.current = audio;
+      audio.onended = () => {
+        if (testAudioUrlRef.current === objectUrl) {
+          stopTestAudio();
+        }
+      };
+      audio.onerror = () => {
+        if (testAudioUrlRef.current === objectUrl) {
+          stopTestAudio();
+        }
+        addToast("Impossible de lire l'audio renvoyé par le serveur.", 'erreur');
+      };
+      await audio.play();
+    } catch (err) {
+      const msg =
+        err instanceof Error && err.message.trim()
+          ? err.message
+          : 'Impossible de tester la synthèse vocale.';
+      addToast(msg, 'erreur');
+    } finally {
+      setTestingVoice(false);
     }
   };
 
@@ -192,6 +457,12 @@ export function ParametresView() {
       icon: Palette,
     },
     {
+      to: '/parametres/voix',
+      id: 'voix',
+      label: 'Voix & Audio',
+      icon: Mic,
+    },
+    {
       to: '/parametres/memoire',
       id: 'memoire',
       label: 'Mémoire',
@@ -210,6 +481,11 @@ export function ParametresView() {
       icon: RefreshCw,
     },
   ];
+
+  const selectedVoixPreset = getVoixPresetId(draft.voix);
+  const selectedMicroMissing =
+    Boolean(draft.voix.micro) &&
+    !micros.some((m) => m.nom === draft.voix.micro);
 
   return (
     <div className="mx-auto max-w-4xl space-y-4">
@@ -380,6 +656,332 @@ export function ParametresView() {
                   'Personnalisation enregistrée.',
                 )
               }
+              className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--accent)]/50 bg-[var(--accent)]/20 px-4 py-2 text-xs font-semibold text-[var(--accent)] hover:bg-[var(--accent)]/30 disabled:opacity-50"
+            >
+              <Save className="h-3.5 w-3.5" />
+              {saving ? 'Enregistrement…' : 'Enregistrer'}
+            </button>
+          </div>
+        </section>
+      )}
+
+      {activeSection === 'voix' && (
+        <section className="hud-panel space-y-6 p-5" aria-label="Voix et Audio">
+          {/* État temps réel du pipeline vocal */}
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-[#05070d]/60 p-4">
+            <div className="min-w-0 space-y-1 text-xs">
+              <div className="hud-label">État du pipeline vocal</div>
+              {loadingVoixEtat && !voixEtat ? (
+                <div className="text-[#94a3b8]">Inspection du matériel vocal…</div>
+              ) : voixEtat ? (
+                <div className="flex flex-wrap items-center gap-2 text-[#e2e8f0]">
+                  <span className="rounded border border-white/10 bg-white/5 px-2 py-0.5 font-mono text-[11px]">
+                    STT : {voixEtat.stt_modele}
+                  </span>
+                  <span
+                    className={cn(
+                      'rounded border px-2 py-0.5 font-mono text-[11px]',
+                      voixEtat.stt_peripherique === 'cuda'
+                        ? 'border-[#34d399]/40 bg-[#34d399]/10 text-[#34d399]'
+                        : 'border-white/15 bg-white/5 text-[#cbd5e1]',
+                    )}
+                  >
+                    {voixEtat.stt_peripherique.toUpperCase()}
+                  </span>
+                  <span className="rounded border border-white/10 bg-white/5 px-2 py-0.5 font-mono text-[11px]">
+                    {voixEtat.stt_charge ? 'Whisper chargé' : 'Whisper en veille'}
+                  </span>
+                  <span className="rounded border border-white/10 bg-white/5 px-2 py-0.5 font-mono text-[11px]">
+                    TTS : {voixEtat.tts_moteur}
+                  </span>
+                  {voixEtat.tts_moteur === 'http' && (
+                    <span
+                      className={cn(
+                        'inline-flex items-center gap-1 rounded border px-2 py-0.5 font-mono text-[11px]',
+                        voixEtat.tts_http_joignable
+                          ? 'border-[#34d399]/40 bg-[#34d399]/10 text-[#34d399]'
+                          : 'border-[#f87171]/40 bg-[#f87171]/10 text-[#f87171]',
+                      )}
+                    >
+                      {voixEtat.tts_http_joignable ? 'Serveur HTTP joignable' : 'Serveur HTTP injoignable'}
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <div className="text-[#94a3b8]">État vocal indisponible.</div>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => void loadVoixInfos()}
+              disabled={loadingVoixEtat || loadingMicros}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-white/15 bg-[#0b1020] px-3 py-1.5 text-xs text-[#cbd5e1] transition hover:border-[var(--accent)]/50 disabled:opacity-50"
+            >
+              <RefreshCw className={cn('h-3.5 w-3.5', loadingVoixEtat && 'animate-spin')} />
+              Actualiser
+            </button>
+          </div>
+
+          {/* Mode vocal */}
+          <div>
+            <span className="hud-label block">Mode vocal</span>
+            <div className="mt-2 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+              <div className="rounded-xl border border-[var(--accent)]/60 bg-[var(--accent)]/12 p-3.5 text-left">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-semibold text-[#f8fafc]">Pipeline local</span>
+                  <span className="rounded-full border border-[var(--accent)]/40 bg-[var(--accent)]/15 px-2 py-0.5 font-mono text-[10px] text-[var(--accent)]">
+                    Actif
+                  </span>
+                </div>
+                <p className="mt-1 text-[11px] text-[#94a3b8]">
+                  Transcription Whisper locale + synthèse vocale sans clé API payante.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                disabled
+                aria-disabled="true"
+                className="cursor-not-allowed rounded-xl border border-white/10 bg-[#05070d]/50 p-3.5 text-left opacity-55"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-semibold text-[#94a3b8]">Pont web : bientôt</span>
+                  <span className="rounded-full border border-white/15 bg-white/5 px-2 py-0.5 font-mono text-[10px] text-[#94a3b8]">
+                    Bientôt
+                  </span>
+                </div>
+                <p className="mt-1 text-[11px] text-[#64748b]">
+                  Relais vocal navigateur distant prévu dans une future version.
+                </p>
+              </button>
+            </div>
+          </div>
+
+          {/* Microphone */}
+          <div className="space-y-2">
+            <label
+              htmlFor="voix-micro-select"
+              className="block text-xs font-medium text-[#cbd5e1]"
+            >
+              Microphone d&apos;entrée
+            </label>
+            <select
+              id="voix-micro-select"
+              value={draft.voix.micro ?? ''}
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  voix: {
+                    ...draft.voix,
+                    micro: e.target.value ? e.target.value : null,
+                  },
+                })
+              }
+              className="w-full rounded-xl border border-white/10 bg-[#05070d] px-3 py-2 text-xs text-[#e2e8f0]"
+            >
+              <option value="">Microphone par défaut du système</option>
+              {selectedMicroMissing && draft.voix.micro && (
+                <option value={draft.voix.micro}>
+                  {draft.voix.micro} (non détecté actuellement)
+                </option>
+              )}
+              {micros.map((m) => (
+                <option key={`${m.index}-${m.nom}`} value={m.nom}>
+                  {m.nom}
+                  {m.defaut ? ' (par défaut)' : ''}
+                </option>
+              ))}
+            </select>
+            {loadingMicros && (
+              <p className="text-[11px] text-[#64748b]">Détection des microphones…</p>
+            )}
+          </div>
+
+          {/* Voix & Moteur TTS + Bouton Tester */}
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="hud-label block">Voix de réponse (TTS)</span>
+              <button
+                type="button"
+                disabled={testingVoice}
+                onClick={() => void handleTestVoice()}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--accent)]/50 bg-[var(--accent)]/15 px-3 py-1.5 text-xs font-semibold text-[var(--accent)] transition hover:bg-[var(--accent)]/25 disabled:opacity-50"
+              >
+                {testingVoice ? (
+                  <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Play className="h-3.5 w-3.5" />
+                )}
+                {testingVoice ? 'Synthèse…' : 'Tester la voix'}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {VOIX_PRESETS.map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => handleSelectVoixPreset(opt.id)}
+                  className={cn(
+                    'rounded-xl border p-3 text-left transition',
+                    selectedVoixPreset === opt.id
+                      ? 'border-[var(--accent)]/60 bg-[var(--accent)]/12'
+                      : 'border-white/10 bg-[#05070d]/70 hover:border-white/25',
+                  )}
+                >
+                  <div className="text-xs font-semibold text-[#f8fafc]">{opt.label}</div>
+                  <div className="mt-0.5 text-[11px] text-[#94a3b8]">{opt.desc}</div>
+                </button>
+              ))}
+            </div>
+
+            {draft.voix.moteur_tts === 'http' && (
+              <div>
+                <label
+                  htmlFor="voix-tts-url"
+                  className="block text-xs font-medium text-[#cbd5e1]"
+                >
+                  URL du serveur TTS local (compatible OpenAI)
+                </label>
+                <input
+                  id="voix-tts-url"
+                  type="url"
+                  value={draft.voix.tts_url ?? ''}
+                  onChange={(e) =>
+                    setDraft({
+                      ...draft,
+                      voix: { ...draft.voix, tts_url: e.target.value },
+                    })
+                  }
+                  placeholder="http://127.0.0.1:8880"
+                  className="mt-1 w-full rounded-xl border border-white/10 bg-[#05070d] px-3 py-2 font-mono text-xs text-[#e2e8f0] placeholder:text-[#64748b]"
+                />
+                <p className="mt-1 text-[11px] text-[#94a3b8]">
+                  Appelle <code className="font-mono">/v1/audio/speech</code> ; bascule automatiquement sur Edge-TTS si injoignable.
+                </p>
+              </div>
+            )}
+
+            <label className="flex cursor-pointer items-center justify-between rounded-xl border border-white/10 bg-[#05070d]/60 p-3.5 text-xs">
+              <div>
+                <div className="font-medium text-[#f8fafc]">Lecture vocale activée</div>
+                <div className="mt-0.5 text-[11px] text-[#94a3b8]">
+                  Prononce automatiquement les réponses vocales de Jarvis.
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={draft.voix.active}
+                onChange={(e) =>
+                  setDraft({
+                    ...draft,
+                    voix: { ...draft.voix, active: e.target.checked },
+                  })
+                }
+                className="accent-[var(--accent)]"
+              />
+            </label>
+          </div>
+
+          {/* Modèle de transcription Whisper */}
+          <div className="space-y-2.5">
+            <span className="hud-label block">Modèle de transcription (Whisper)</span>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+              {STT_MODELES.map((mod) => (
+                <button
+                  key={mod.id}
+                  type="button"
+                  onClick={() =>
+                    setDraft({
+                      ...draft,
+                      voix: {
+                        ...draft.voix,
+                        stt_modele: mod.id,
+                        stt_beam_final: mod.id === 'large-v3-turbo' ? 1 : 5,
+                      },
+                    })
+                  }
+                  className={cn(
+                    'rounded-xl border p-3 text-left transition',
+                    draft.voix.stt_modele === mod.id
+                      ? 'border-[var(--accent)]/60 bg-[var(--accent)]/12'
+                      : 'border-white/10 bg-[#05070d]/70 hover:border-white/25',
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-[#f8fafc]">{mod.label}</span>
+                    <span className="font-mono text-[10px] text-[var(--accent)]">{mod.taille}</span>
+                  </div>
+                  <p className="mt-1 text-[11px] leading-relaxed text-[#94a3b8]">{mod.note}</p>
+                </button>
+              ))}
+            </div>
+            <div className="flex items-start gap-2 rounded-xl border border-white/10 bg-[#05070d]/50 p-3 text-[11px] text-[#94a3b8]">
+              <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
+              <span>
+                {voixEtat?.stt_peripherique === 'cuda'
+                  ? 'GPU CUDA détecté : Large v3 Turbo offre la meilleure vitesse et précision.'
+                  : 'Aucun GPU CUDA actif détecté : le modèle Small (int8 CPU) est recommandé pour rester fluide.'}
+              </span>
+            </div>
+          </div>
+
+          {/* Déclenchement & Voie rapide */}
+          <div className="space-y-3">
+            <span className="hud-label block">Déclenchement &amp; Réactivité</span>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {DECLENCHEMENT_OPTIONS.map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() =>
+                    setDraft({
+                      ...draft,
+                      voix: { ...draft.voix, declenchement: opt.id },
+                    })
+                  }
+                  className={cn(
+                    'rounded-xl border p-3 text-left transition',
+                    draft.voix.declenchement === opt.id
+                      ? 'border-[var(--accent)]/60 bg-[var(--accent)]/12'
+                      : 'border-white/10 bg-[#05070d]/70 hover:border-white/25',
+                  )}
+                >
+                  <div className="text-xs font-semibold text-[#f8fafc]">{opt.label}</div>
+                  <div className="mt-0.5 text-[11px] text-[#94a3b8]">{opt.desc}</div>
+                </button>
+              ))}
+            </div>
+
+            <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-white/10 bg-[#05070d]/60 p-3.5 text-xs">
+              <div>
+                <div className="font-medium text-[#f8fafc]">
+                  Réponses rapides (voie rapide)
+                </div>
+                <div className="mt-0.5 text-[11px] text-[#94a3b8]">
+                  Garde Antigravity chaud (2 à 4 s) pour les questions directes ; bascule vers le pipeline complet dès qu&apos;une action est demandée.
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={draft.voix.rapide}
+                onChange={(e) =>
+                  setDraft({
+                    ...draft,
+                    voix: { ...draft.voix, rapide: e.target.checked },
+                  })
+                }
+                className="accent-[var(--accent)]"
+              />
+            </label>
+          </div>
+
+          <div className="flex justify-end">
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => void handleSaveVoix()}
               className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--accent)]/50 bg-[var(--accent)]/20 px-4 py-2 text-xs font-semibold text-[var(--accent)] hover:bg-[var(--accent)]/30 disabled:opacity-50"
             >
               <Save className="h-3.5 w-3.5" />

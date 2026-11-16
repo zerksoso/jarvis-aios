@@ -27,11 +27,23 @@ _RE_FIELD_NAME = re.compile(r'\bname=(?:"([^"]+)"|([^;\s]+))', re.IGNORECASE)
 _RE_FILENAME = re.compile(r'\bfilename=(?:"([^"]*)"|([^;\s]+))', re.IGNORECASE)
 
 
+TEXTE_TEST_VOIX_DEFAUT = "Bonjour, ici Jarvis. Ma voix est bien configurée."
+
+
 class ParlerRequest(BaseModel):
     """Corps de requête pour la synthèse vocale ``POST /api/voix/parler``."""
 
     texte: str = Field(min_length=1)
     voix: str | None = None
+
+
+class TesterVoixRequest(BaseModel):
+    """Corps optionnel pour tester la synthèse vocale via ``POST /api/voix/tester``."""
+
+    texte: str | None = None
+    voix: str | None = None
+    moteur_tts: str | None = None
+    tts_url: str | None = None
 
 
 async def _handle_ws_ecoute(ws: WebSocket, data: dict[str, Any]) -> None:
@@ -272,3 +284,80 @@ async def obtenir_audio(nom: str) -> FileResponse:
     else:
         media_type = "application/octet-stream"
     return FileResponse(cible, media_type=media_type)
+
+
+@router.get("/micros")
+async def lister_microphones() -> list[dict[str, Any]]:
+    """Liste les périphériques d'entrée audio détectés sur la machine.
+
+    Returns:
+        Liste ``[{"index": int, "nom": str, "defaut": bool}]``.
+    """
+    return await asyncio.to_thread(stt.lister_micros)
+
+
+@router.get("/etat")
+async def lire_etat_voix() -> dict[str, Any]:
+    """Retourne l'état courant du pipeline vocal (modèle STT, périphérique, moteur TTS).
+
+    Returns:
+        Dictionnaire ``{"stt_modele", "stt_peripherique", "stt_charge", "tts_moteur", "tts_http_joignable"}``.
+    """
+    etat_stt = await asyncio.to_thread(stt.etat_stt)
+    voix_cfg = settings_store.lire().get("voix")
+    cfg_dict = voix_cfg if isinstance(voix_cfg, dict) else {}
+
+    tts_moteur = str(cfg_dict.get("moteur_tts") or "edge").strip().lower() or "edge"
+    tts_url = cfg_dict.get("tts_url")
+    if tts_moteur == "http":
+        tts_http_joignable: bool | None = await tts.tester_tts_http(
+            str(tts_url) if isinstance(tts_url, str) else None
+        )
+    else:
+        tts_http_joignable = None
+
+    return {
+        "stt_modele": etat_stt["stt_modele"],
+        "stt_peripherique": etat_stt["stt_peripherique"],
+        "stt_charge": bool(etat_stt["stt_charge"]),
+        "tts_moteur": tts_moteur,
+        "tts_http_joignable": tts_http_joignable,
+    }
+
+
+@router.post("/tester")
+async def tester_voix(body: TesterVoixRequest | None = None) -> FileResponse:
+    """Synthétise une courte phrase de test et renvoie directement le flux audio.
+
+    Args:
+        body: Texte et surcharges TTS optionnelles (``voix``, ``moteur_tts``, ``tts_url``).
+
+    Returns:
+        Fichier audio ``audio/mpeg`` ou ``audio/wav`` prêt à être lu par le navigateur.
+
+    Raises:
+        HTTPException: 400 si le texte est invalide, 503 si la synthèse vocale échoue.
+    """
+    req = body or TesterVoixRequest()
+    texte_effectif = (req.texte or "").strip() or TEXTE_TEST_VOIX_DEFAUT
+
+    voix_cfg = settings_store.lire().get("voix")
+    cfg_dict = voix_cfg if isinstance(voix_cfg, dict) else {}
+    voix_choisie = (req.voix or str(cfg_dict.get("nom") or "") or tts.VOIX_DEFAUT).strip() or tts.VOIX_DEFAUT
+
+    kwargs: dict[str, Any] = {"voix": voix_choisie}
+    if req.moteur_tts is not None:
+        kwargs["moteur_tts"] = req.moteur_tts
+    if req.tts_url is not None:
+        kwargs["tts_url"] = req.tts_url
+
+    try:
+        chemin = await tts.synthetiser(texte_effectif, **kwargs)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Échec du test de synthèse vocale")
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    media_type = "audio/wav" if chemin.suffix.lower() == ".wav" else "audio/mpeg"
+    return FileResponse(chemin, media_type=media_type)
