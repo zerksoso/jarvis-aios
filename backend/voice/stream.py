@@ -21,7 +21,8 @@ from backend.api import chat
 from backend.api.chat import ChatRequest
 from backend.brain import memories
 from backend.llm.agy_session import MODELE_RAPIDE_DEFAUT, SessionAgyChaude
-from backend.voice import stt, tts
+from backend.llm.llm_local_session import SessionLLMLocale
+from backend.voice import kyutai, stt, tts
 from backend.ws_hub import hub
 
 logger = logging.getLogger(__name__)
@@ -608,9 +609,10 @@ class SessionVocale:
         self._tache_partiel: asyncio.Task[None] | None = None
         self._tache_synth: asyncio.Task[Path] | None = None
         self._tache_prechauffe_agy: asyncio.Task[None] | None = None
+        self._tache_kyutai: asyncio.Task[bool] | None = None
         self._tache_rapide: asyncio.Task[None] | None = None
 
-        self._session_agy: SessionAgyChaude | None = session_agy
+        self._session_agy: Any = session_agy
         self._voie_rapide_bloquee = False
 
         self._fermee = False
@@ -640,6 +642,17 @@ class SessionVocale:
         if self._voie_rapide_bloquee:
             return False
         return bool(self._voix_config().get("rapide", True))
+
+    def _creer_session_rapide(self) -> Any:
+        """Crée la session de voie rapide : LLM local (LM Studio) ou ``agy`` chaud selon les réglages."""
+        cfg = self._voix_config()
+        if str(cfg.get("llm_rapide") or "agy") == "local":
+            return SessionLLMLocale(
+                modele=str(cfg.get("llm_local_modele") or ""),
+                url=str(cfg.get("llm_local_url") or ""),
+            )
+        modele = str(cfg.get("modele_rapide") or MODELE_RAPIDE_DEFAUT).strip() or MODELE_RAPIDE_DEFAUT
+        return SessionAgyChaude(modele=modele)
 
     def _resoudre_voix(self) -> str:
         """Retourne la voix TTS configurée pour la session ou celle des paramètres globaux."""
@@ -712,11 +725,12 @@ class SessionVocale:
         """Démarre en arrière-plan la session ``agy`` chaude si la voie rapide est active."""
         if not self._voie_rapide_active() or self._fermee:
             return
-        modele_rapide = str(self._voix_config().get("modele_rapide") or MODELE_RAPIDE_DEFAUT).strip()
         if self._session_agy is None:
-            self._session_agy = SessionAgyChaude(modele=modele_rapide or MODELE_RAPIDE_DEFAUT)
+            self._session_agy = self._creer_session_rapide()
         try:
             await self._session_agy.demarrer()
+            if isinstance(self._session_agy, SessionLLMLocale):
+                await self._session_agy.prechauffer()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -737,6 +751,9 @@ class SessionVocale:
         self._ecouteur_enregistre = True
         self._tache_hub = asyncio.create_task(self._boucle_evenements_hub())
         self._tache_tts = asyncio.create_task(self._boucle_tts())
+
+        if str(self._voix_config().get("moteur_tts") or "") == "kyutai":
+            self._tache_kyutai = asyncio.create_task(kyutai.assurer_demarre())
 
         if self._voie_rapide_active():
             self._tache_prechauffe_agy = asyncio.create_task(self._prechauffer_agy())
@@ -1058,12 +1075,8 @@ class SessionVocale:
             await self._demarrer_tour_chat(texte)
             return
 
-        modele_rapide = (
-            str(self._voix_config().get("modele_rapide") or MODELE_RAPIDE_DEFAUT).strip()
-            or MODELE_RAPIDE_DEFAUT
-        )
         if self._session_agy is None:
-            self._session_agy = SessionAgyChaude(modele=modele_rapide)
+            self._session_agy = self._creer_session_rapide()
 
         session_agy = self._session_agy
         phrases_envoyees = False

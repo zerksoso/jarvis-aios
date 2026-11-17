@@ -204,7 +204,8 @@ export interface MoteursPayload {
 }
 
 /** Moteur de synthèse vocale utilisé pour les réponses parlées. */
-export type MoteurTts = 'edge' | 'windows' | 'http';
+export type MoteurTts = 'edge' | 'windows' | 'http' | 'kyutai';
+export type LlmRapide = 'agy' | 'local';
 
 /** Modèle Whisper local utilisé pour la transcription. */
 export type SttModele = 'large-v3-turbo' | 'medium' | 'small';
@@ -233,6 +234,9 @@ export interface VoixParametres {
   micro: string | null;
   rapide: boolean;
   modele_rapide: string;
+  llm_rapide: LlmRapide;
+  llm_local_url: string;
+  llm_local_modele: string;
   mode: ModeVoix;
   web_service: WebServiceVoix;
   web_navigateur: WebNavigateurVoix;

@@ -58,7 +58,7 @@ const VOIX_OPTIONS = [
   { id: 'fr-FR-DeniseNeural', label: 'Denise (fr-FR-DeniseNeural)' },
 ];
 
-type VoixPresetId = 'edge-henri' | 'edge-denise' | 'windows' | 'http';
+type VoixPresetId = 'edge-henri' | 'edge-denise' | 'windows' | 'http' | 'kyutai';
 
 const VOIX_PRESETS: Array<{
   id: VoixPresetId;
@@ -74,6 +74,11 @@ const VOIX_PRESETS: Array<{
     id: 'edge-denise',
     label: 'Denise (fr-FR-DeniseNeural)',
     desc: 'Voix Edge-TTS naturelle féminine.',
+  },
+  {
+    id: 'kyutai',
+    label: 'Kyutai (locale, très naturelle)',
+    desc: 'Voix neuronale française sur ton GPU, hors ligne. Se lance toute seule ; Edge sert de secours le temps du chargement.',
   },
   {
     id: 'windows',
@@ -176,6 +181,7 @@ const WEB_NAVIGATEUR_OPTIONS: Array<{
  * Déduit l'identifiant de préréglage TTS affiché dans la section « Voix & Audio ».
  */
 function getVoixPresetId(voix: Parametres['voix']): VoixPresetId {
+  if (voix.moteur_tts === 'kyutai') return 'kyutai';
   if (voix.moteur_tts === 'windows') return 'windows';
   if (voix.moteur_tts === 'http') return 'http';
   return voix.nom === 'fr-FR-DeniseNeural' ? 'edge-denise' : 'edge-henri';
@@ -358,6 +364,9 @@ export function ParametresView() {
       } else if (presetId === 'edge-denise') {
         nextVoix.moteur_tts = 'edge';
         nextVoix.nom = 'fr-FR-DeniseNeural';
+      } else if (presetId === 'kyutai') {
+        nextVoix.moteur_tts = 'kyutai';
+        nextVoix.nom = 'defaut';
       } else if (presetId === 'windows') {
         nextVoix.moteur_tts = 'windows';
       } else {
@@ -1166,6 +1175,32 @@ export function ParametresView() {
                 className="accent-[var(--accent)]"
               />
             </label>
+
+            {draft.voix.rapide && (
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {([
+                  { id: 'agy', label: 'Antigravity (cloud)', desc: 'Plus intelligent, 2 à 4 s avant la première phrase.' },
+                  { id: 'local', label: 'Modèle local (LM Studio)', desc: 'Réponse en moins d’une seconde, hors ligne, sur ton GPU. Les actions passent toujours par l’agent complet.' },
+                ] as const).map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() =>
+                      setDraft({ ...draft, voix: { ...draft.voix, llm_rapide: opt.id } })
+                    }
+                    className={cn(
+                      'rounded-xl border p-3 text-left transition',
+                      draft.voix.llm_rapide === opt.id
+                        ? 'border-[var(--accent)]/60 bg-[var(--accent)]/12'
+                        : 'border-white/10 bg-[#05070d]/70 hover:border-white/25',
+                    )}
+                  >
+                    <div className="text-xs font-semibold text-[#f8fafc]">{opt.label}</div>
+                    <div className="mt-0.5 text-[11px] text-[#94a3b8]">{opt.desc}</div>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="flex justify-end">

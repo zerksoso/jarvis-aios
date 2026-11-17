@@ -22,7 +22,7 @@ class VoixPatch(BaseModel):
 
     active: bool | None = None
     nom: str | None = None
-    moteur_tts: Literal["edge", "windows", "http"] | None = None
+    moteur_tts: Literal["edge", "windows", "http", "kyutai"] | None = None
     tts_url: str | None = None
     stt_modele: Literal["large-v3-turbo", "medium", "small"] | None = None
     stt_beam_final: int | None = Field(default=None, ge=1, le=10)
@@ -30,6 +30,9 @@ class VoixPatch(BaseModel):
     micro: str | None = None
     rapide: bool | None = None
     modele_rapide: str | None = None
+    llm_rapide: Literal["agy", "local"] | None = None
+    llm_local_url: str | None = None
+    llm_local_modele: str | None = None
     mode: Literal["local", "web"] | None = None
     web_service: Literal["chatgpt", "gemini"] | None = None
     web_navigateur: Literal["defaut", "chrome", "edge"] | None = None
@@ -45,7 +48,7 @@ class VoixPatch(BaseModel):
             raise ValueError("La valeur ne peut pas être vide.")
         return propre
 
-    @field_validator("tts_url")
+    @field_validator("tts_url", "llm_local_url")
     @classmethod
     def _valider_tts_url(cls, valeur: str | None) -> str | None:
         """Valide que ``tts_url`` est vide/null ou une URL HTTP(S) bien formée."""
@@ -56,7 +59,7 @@ class VoixPatch(BaseModel):
             return None
         parsed = urlparse(propre)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
-            raise ValueError("tts_url doit être une URL http:// ou https:// valide.")
+            raise ValueError("L'URL doit être une URL http:// ou https:// valide.")
         return propre.rstrip("/")
 
     @field_validator("micro")

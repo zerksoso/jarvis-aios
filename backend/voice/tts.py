@@ -16,11 +16,12 @@ import httpx
 import pyttsx3
 
 from backend import config, settings_store
+from backend.voice import kyutai
 
 logger = logging.getLogger(__name__)
 
 VOIX_DEFAUT = "fr-FR-HenriNeural"
-MOTEURS_TTS_VALIDES: tuple[str, ...] = ("edge", "windows", "http")
+MOTEURS_TTS_VALIDES: tuple[str, ...] = ("edge", "windows", "http", "kyutai")
 MAX_CARACTERES_TTS = 1200
 
 _pyttsx3_lock = threading.Lock()
@@ -301,6 +302,23 @@ async def synthetiser(
             return await asyncio.to_thread(_synthetiser_pyttsx3, propre, chemin_win)
         except Exception as exc:
             raise RuntimeError(f"Synthèse vocale Windows impossible : {exc}") from exc
+
+    if moteur_actif == "kyutai":
+        if await kyutai.assurer_demarre():
+            try:
+                return await _synthetiser_http(
+                    propre,
+                    voix_active,
+                    kyutai.URL_KYUTAI,
+                    tts_dir,
+                    transport=transport,
+                )
+            except Exception as exc:
+                logger.warning("TTS Kyutai indisponible (%s), repli sur edge-tts.", exc)
+        else:
+            logger.info("TTS Kyutai pas encore prêt, repli sur edge-tts pour cette phrase.")
+        if not re.fullmatch(r"[a-z]{2,3}-[A-Z]{2}-\w+Neural", voix_active):
+            voix_active = VOIX_DEFAUT  # nom Kyutai invalide pour edge-tts
 
     if moteur_actif == "http":
         if url_active:

@@ -27,6 +27,9 @@ DEFAUTS: dict[str, Any] = {
         "micro": None,
         "rapide": True,
         "modele_rapide": "gemini-4-hydrogen-low",
+        "llm_rapide": "agy",
+        "llm_local_url": "http://127.0.0.1:1234/v1",
+        "llm_local_modele": "",
         "mode": "local",
         "web_service": "chatgpt",
         "web_navigateur": "defaut",
@@ -39,10 +42,11 @@ DEFAUTS: dict[str, Any] = {
     },
 }
 
-_MOTEURS_TTS = ("edge", "windows", "http")
+_MOTEURS_TTS = ("edge", "windows", "http", "kyutai")
 _MODELES_STT = ("large-v3-turbo", "medium", "small")
 _DECLENCHEMENTS_VOIX = ("push", "continu")
 _MODES_VOIX = ("local", "web")
+_LLM_RAPIDES = ("agy", "local")
 _WEB_SERVICES = ("chatgpt", "gemini")
 _WEB_NAVIGATEURS = ("defaut", "chrome", "edge")
 
@@ -111,6 +115,18 @@ def _normaliser_bloc_voix(voix: dict[str, Any], defauts_voix: dict[str, Any]) ->
         if isinstance(modele_rapide, str) and modele_rapide.strip()
         else defauts_voix["modele_rapide"]
     )
+
+    llm_rapide = str(res.get("llm_rapide") or "").strip().lower()
+    res["llm_rapide"] = llm_rapide if llm_rapide in _LLM_RAPIDES else defauts_voix["llm_rapide"]
+
+    llm_url = res.get("llm_local_url")
+    res["llm_local_url"] = (
+        str(llm_url).strip().rstrip("/")
+        if isinstance(llm_url, str) and llm_url.strip().startswith(("http://", "https://"))
+        else defauts_voix["llm_local_url"]
+    )
+    llm_modele = res.get("llm_local_modele")
+    res["llm_local_modele"] = str(llm_modele).strip() if isinstance(llm_modele, str) else ""
 
     mode = str(res.get("mode") or "").strip().lower()
     res["mode"] = mode if mode in _MODES_VOIX else defauts_voix["mode"]
